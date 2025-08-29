@@ -9,19 +9,25 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@vercel/postgres": "^0.10.0",
+    "ai": "^5.0.27",
+    "dotenv": "^17.2.1",
+    "next": "15.5.2",
+    "pdf-parse": "^1.1.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "next": "15.5.2"
+    "vercel-ai": "^0.0.0"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@tailwindcss/postcss": "^4",
-    "tailwindcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.5.2",
-    "@eslint/eslintrc": "^3"
+    "tailwindcss": "^4",
+    "typescript": "^5"
   }
 }
