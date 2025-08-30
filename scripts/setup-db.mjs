@@ -17,8 +17,10 @@ async function setupDatabase() {
         const createTableQuery = `
             CREATE TABLE IF NOT EXISTS documents (
                 id bigserial PRIMARY KEY,
-                content TEXT NOT NULL,
-                embedding vector(768)
+                content TEXT,
+                embedding vector(768),
+                type TEXT default 'text',
+                url TEXT
             )
           `;
         await pool.query(createTableQuery);
