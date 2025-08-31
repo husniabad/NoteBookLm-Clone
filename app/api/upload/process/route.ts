@@ -3,9 +3,13 @@ import { sql } from "@/app/lib/vercel-postgres";
 import genAI from "@/app/lib/gemini";
 import { splitIntoChunks } from "@/app/lib/rag-utils";
 import { put } from "@vercel/blob";
+import pdf2pic from 'pdf2pic';
 import PDFParser from "pdf2json";
 import { Part } from "@google/generative-ai";
 import sharp from 'sharp';
+import { promises as fs } from 'fs';
+import path from 'path';
+import { tmpdir } from 'os';
 
 export async function POST(req: NextRequest) {
   try {
@@ -22,6 +26,7 @@ export async function POST(req: NextRequest) {
 
     // --- Case 1: PDF Files (Advanced Processing) ---
     if (fileType === 'application/pdf') {
+      // Extract text using pdf2json
       const pdfParser = new PDFParser(null, 1);
       
       const pdfData: any = await new Promise((resolve, reject) => {
@@ -39,30 +44,45 @@ export async function POST(req: NextRequest) {
         await sql`INSERT INTO documents (content, embedding, type, session_id) VALUES (${chunk}, ${JSON.stringify(embedding)}, 'text', ${sessionId})`;
       }));
       
-      const pages = pdfData.Pages;
-      let imageCounter = 0;
-      for (let i = 0; i < pages.length; i++) {
-        const page = pages[i];
-        if (page.Images && page.Images.length > 0) {
-            for (const image of page.Images) {
-                imageCounter++;
-                const imageBuffer = Buffer.from(image.bitmap, 'base64'); // Note: This is conceptual and may need adjustment
-                
-                let nearbyText = findNearbyText(image, page.Texts);
+      // Extract images using pdf2pic
+      const tempDir = path.join(tmpdir(), `pdf_images_${Date.now()}`);
+      await fs.mkdir(tempDir, { recursive: true });
+      
+      const tempPdfPath = path.join(tempDir, 'temp.pdf');
+      await fs.writeFile(tempPdfPath, fileBuffer);
+      
+      const options = {
+        density: 100,
+        savePath: tempDir,
+        saveFilename: "page_image",
+        format: "png" as const,
+        width: 800,
+        height: 1100,
+      };
 
-                const resizedBuffer = await sharp(imageBuffer).resize({ width: 1024 }).toBuffer();
-                const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/png' } };
-                const descriptionResult = await visionModel.generateContent([`This image is from page ${i + 1} of a PDF. The text nearest to it in the document is: "${nearbyText}". Based on the image and this context, describe the image in detail.`, imagePart]);
-                const richDescription = descriptionResult.response.text();
+      const convert = pdf2pic.fromPath(tempPdfPath, options);
+      const results = await convert.bulk(-1, { responseType: "image" });
+      
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        if (result.path) {
+          const imageBuffer = await fs.readFile(result.path);
+          const resizedBuffer = await sharp(imageBuffer).resize({ width: 1024 }).toBuffer();
+          
+          const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/png' } };
+          const descriptionResult = await visionModel.generateContent([`This image is from page ${i + 1} of a PDF document. Describe the image in detail.`, imagePart]);
+          const richDescription = descriptionResult.response.text();
 
-                const embeddingResult = await embeddingModel.embedContent(richDescription);
-                const embedding = embeddingResult.embedding.values;
-                
-                const blob = await put(`${originalFileName}_image_${imageCounter}.png`, resizedBuffer, { access: 'public', addRandomSuffix: true });
-                await sql`INSERT INTO documents (content, embedding, type, url, session_id) VALUES (${richDescription}, ${JSON.stringify(embedding)}, 'image', ${blob.url}, ${sessionId})`;
-            }
+          const embeddingResult = await embeddingModel.embedContent(richDescription);
+          const embedding = embeddingResult.embedding.values;
+          
+          const blob = await put(`${originalFileName}_page_${i + 1}.png`, resizedBuffer, { access: 'public', addRandomSuffix: true });
+          await sql`INSERT INTO documents (content, embedding, type, url, session_id) VALUES (${richDescription}, ${JSON.stringify(embedding)}, 'image', ${blob.url}, ${sessionId})`;
         }
       }
+      
+      // Cleanup temp files
+      await fs.rm(tempDir, { recursive: true, force: true });
     } 
     // --- Case 2: Standalone Image Files ---
     else if (fileType.startsWith('image/')) {
@@ -98,15 +118,3 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Helper function to find text near an image based on coordinates
-function findNearbyText(image: any, texts: any[], range = 50): string {
-    let nearbyTexts: string[] = [];
-    for (const text of texts) {
-        const dx = Math.abs(text.x - image.x);
-        const dy = Math.abs(text.y - image.y);
-        if (dx < range && dy < range) {
-            nearbyTexts.push(decodeURIComponent(text.R[0].T));
-        }
-    }
-    return nearbyTexts.join(' ').substring(0, 500); // Limit context size
-}
