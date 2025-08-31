@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@/app/lib/vercel-postgres";
-import genAI from "@/app/lib/gemini";
+import genAI from "@/app/lib/ai-provider";
 import { splitIntoChunks } from "@/app/lib/rag-utils";
 
 import pdf2pic from 'pdf2pic';
@@ -38,7 +38,10 @@ export async function POST(req: NextRequest) {
       
 
       if (textChunks.length > 0) {
-        const textEmbeddingPromises = textChunks.map(chunk => embeddingModel.embedContent(chunk));
+        if (!embeddingModel.embedContent) {
+          throw new Error('Embedding model does not support embedContent');
+        }
+        const textEmbeddingPromises = textChunks.map(chunk => embeddingModel.embedContent!(chunk));
         const textEmbeddings = await Promise.all(textEmbeddingPromises);
         
         const textInsertPromises = textChunks.map((chunk, i) => 
@@ -68,29 +71,43 @@ export async function POST(req: NextRequest) {
       
 
       const imagePromises = results.map(async (result: { path?: string }, i: number) => {
+        // Add delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, i * 1000)); // 1s delay between images
         if (!result.path) return null;
         
         const imageBuffer = await fs.readFile(result.path);
-        const resizedBuffer = await sharp(imageBuffer).resize({ width: 512 }).toBuffer();
+        const metadata = await sharp(imageBuffer).metadata();
+        const resizedBuffer = metadata.width && metadata.width > 800 
+          ? await sharp(imageBuffer).resize({ width: 800 }).toBuffer()
+          : imageBuffer;
         
         const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/png' } };
-        const prompt = `Analyze this image from page ${i + 1} of a PDF. Provide:
+        const prompt = `Analyze this image from page ${i + 1} of a PDF. Extract ALL visible details:
 1. Content type (chart, diagram, photo, text, table, etc.)
-2. Detailed description including all visible text
-3. Key data points if it's a chart/graph
-4. Any important visual elements
+2. All visible text (transcribe exactly)
+3. If people: describe physical features (skin tone, hair color, clothing, age, gender, facial features)
+4. If objects: describe colors, materials, shapes, brands, text on items
+5. If charts/graphs: extract all data points and labels
+6. Background details, lighting, setting
+7. Any numbers, dates, or specific information
 
-Format: [Page ${i + 1}] [TYPE: content_type] Detailed description with all text and data.`;
+Be comprehensive and specific. Format: [Page ${i + 1}] [TYPE: content_type] Complete detailed description.`;
         
+        if (!visionModel.generateContent) {
+          throw new Error('Vision model does not support generateContent');
+        }
         const descriptionResult = await visionModel.generateContent([prompt, imagePart]);
-        return descriptionResult.response.text();
+        return descriptionResult!.response.text();
       });
       
       const descriptions = (await Promise.all(imagePromises)).filter(Boolean) as string[];
       
       if (descriptions.length > 0) {
 
-        const embeddingPromises = descriptions.map(desc => embeddingModel.embedContent(desc));
+        if (!embeddingModel.embedContent) {
+          throw new Error('Embedding model does not support embedContent');
+        }
+        const embeddingPromises = descriptions.map(desc => embeddingModel.embedContent!(desc));
         const embeddings = await Promise.all(embeddingPromises);
         
 
@@ -105,15 +122,21 @@ Format: [Page ${i + 1}] [TYPE: content_type] Detailed description with all text 
     } 
 
     else if (fileType.startsWith('image/')) {
-      const resizedBuffer = await sharp(fileBuffer)
-        .resize({ width: 800, height: 800, fit: 'inside' })
-        .jpeg({ quality: 90 })
-        .toBuffer();
+      const metadata = await sharp(fileBuffer).metadata();
+      const resizedBuffer = (metadata.width && metadata.width > 1200) || (metadata.height && metadata.height > 1200)
+        ? await sharp(fileBuffer).resize({ width: 1200, height: 1200, fit: 'inside' }).jpeg({ quality: 90 }).toBuffer()
+        : fileBuffer;
 
       const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/jpeg' } };
-      const descriptionResult = await visionModel.generateContent(["Describe this image in detail, focusing on objects, text, and overall context.", imagePart]);
-      const richDescription = descriptionResult.response.text();
+      if (!visionModel.generateContent) {
+        throw new Error('Vision model does not support generateContent');
+      }
+      const descriptionResult = await visionModel.generateContent(["Analyze this image comprehensively. Describe ALL visible details including: people (skin tone, hair color, facial features, clothing, age, gender), objects (colors, materials, text, brands), background (setting, lighting, colors), any text or numbers visible, and overall composition. Be specific and thorough.", imagePart]);
+      const richDescription = descriptionResult!.response.text();
 
+      if (!embeddingModel.embedContent) {
+        throw new Error('Embedding model does not support embedContent');
+      }
       const embeddingResult = await embeddingModel.embedContent(richDescription);
       const embedding = embeddingResult.embedding.values;
 
@@ -123,8 +146,11 @@ Format: [Page ${i + 1}] [TYPE: content_type] Detailed description with all text 
     else if (fileType.startsWith('text/')) {
         const text = fileBuffer.toString('utf-8');
         const textChunks = splitIntoChunks(text);
+        if (!embeddingModel.embedContent) {
+          throw new Error('Embedding model does not support embedContent');
+        }
         await Promise.all(textChunks.map(async (chunk) => {
-            const embeddingResult = await embeddingModel.embedContent(chunk);
+            const embeddingResult = await embeddingModel.embedContent!(chunk);
             const embedding = embeddingResult.embedding.values;
             await sql`INSERT INTO documents (content, embedding, type, session_id) VALUES (${chunk}, ${JSON.stringify(embedding)}, 'text', ${sessionId})`;
         }));
