@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
         addRandomSuffix: true,
       });
 
-      // --- THE FIX: Add detailed logging and error handling around the fetch call ---
+
       console.log(`Triggering background job for: ${blob.url}`);
       try {
         const processResponse = await fetch(new URL('/api/upload/process', req.url), {
@@ -30,17 +30,14 @@ export async function POST(req: NextRequest) {
           }),
         });
         
-        // Log the response from the trigger
+
         if (!processResponse.ok) {
             console.error(`Error triggering background job. Status: ${processResponse.status} ${processResponse.statusText}`);
             const errorBody = await processResponse.json();
             console.error('Error body:', errorBody);
-        } else {
-            console.log('Successfully triggered background job.');
         }
-
       } catch (triggerError) {
-          console.error('Fetch call to trigger background job failed:', triggerError);
+        console.error('Background job trigger failed:', triggerError);
       }
     }));
 
