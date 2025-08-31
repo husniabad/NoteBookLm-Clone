@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useRef, FormEvent, useEffect, ChangeEvent, DragEvent, KeyboardEvent } from 'react';
-import { useChat } from 'ai/react';
+import { useExtendedChat } from '../hooks/useExtendedChat';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import Messages from './Messages';
+
+
 import Textarea from 'react-textarea-autosize';
 import { Paperclip, XCircle, Loader2 } from 'lucide-react';
 import { ThemeToggle } from './theme-toggle';
@@ -22,10 +24,20 @@ export default function ChatLayout() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] = useState('');
+
   const [rejectionMessage, setRejectionMessage] = useState('');
 
-  const { messages, input, handleInputChange, handleSubmit, setMessages, isLoading } = useChat({
+  const { 
+    messages, 
+    input, 
+    handleInputChange, 
+    handleSubmit, 
+    isLoading, 
+    addMessageWithProgress,
+    updateMessageProgress,
+    completeMessageProgress,
+    appendWithFiles
+  } = useExtendedChat({
     api: '/api/chat',
     body: { sessionId },
   });
@@ -39,8 +51,7 @@ export default function ChatLayout() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  // --- NEW POLLING FUNCTION ---
-  // This function repeatedly asks our new '/api/upload/status' endpoint if processing is done.
+  // Poll upload status until complete
   const pollForProcessingCompletion = async (sId: string): Promise<boolean> => {
     return new Promise((resolve) => {
       const interval = setInterval(async () => {
@@ -60,9 +71,9 @@ export default function ChatLayout() {
         } catch (error) {
           console.error('Polling error:', error);
           clearInterval(interval);
-          resolve(false); // Resolve false on error
+          resolve(false);
         }
-      }, 2000); // Check every 2 seconds
+      }, 2000);
     });
   };
 
@@ -85,7 +96,6 @@ export default function ChatLayout() {
   };
 
   const handleNewChat = () => {
-    setMessages([]);
     setFiles([]);
     setSessionId(null);
     if (fileInputRef.current) {
@@ -93,7 +103,7 @@ export default function ChatLayout() {
     }
   };
 
-  // --- UPDATED SUBMISSION LOGIC WITH POLLING ---
+
   const customHandleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setRejectionMessage('');
@@ -105,11 +115,22 @@ export default function ChatLayout() {
     }
     const finalSessionId = currentSessionId!;
 
-    let textToSend = input;
+    const textToSend = input;
+    const currentFiles = [...files];
 
     if (files.length > 0) {
+
+      const messageId = addMessageWithProgress(
+        textToSend.trim(),
+        currentFiles.map(file => ({
+          name: file.name,
+          type: file.type,
+          size: file.size
+        })),
+        'uploading'
+      );
+      
       setIsUploading(true);
-      setUploadMessage('Uploading files...');
       const formData = new FormData();
       files.forEach(file => formData.append('files', file));
       formData.append('sessionId', finalSessionId);
@@ -121,27 +142,34 @@ export default function ChatLayout() {
         });
         if (!uploadResponse.ok) throw new Error('File upload failed');
 
-        setUploadMessage('Processing files, please wait...');
-        // Start polling and wait for it to complete
+
+        updateMessageProgress(messageId, 'processing');
+        
         await pollForProcessingCompletion(finalSessionId);
 
-        setUploadMessage('Processing complete!');
+        if (textToSend.trim()) {
+          completeMessageProgress(messageId);
+          await appendWithFiles(textToSend.trim(), currentFiles, { sessionId: finalSessionId });
+        } else {
+          updateMessageProgress(messageId, 'complete');
+        }
+        
         setFiles([]);
       } catch (error) {
         console.error("Upload error:", error);
-        setUploadMessage('Upload failed. Please try again.');
+        updateMessageProgress(messageId, 'complete', (textToSend.trim() || 'Upload') + ' (Upload failed)');
         setIsUploading(false);
         return;
       } finally {
         setIsUploading(false);
-        setTimeout(() => setUploadMessage(''), 3000);
       }
     }
     
-    // Send the chat message only if there is text
-    if (textToSend.trim() !== '') {
-        handleSubmit(e, { options: { body: { sessionId: finalSessionId } } });
+
+    if (textToSend.trim() !== '' && files.length === 0) {
+      handleSubmit(e, { options: { body: { sessionId: finalSessionId } } });
     }
+
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -170,14 +198,14 @@ export default function ChatLayout() {
   const formIsDisabled = isUploading || isLoading;
 
   return (
-    // ... JSX remains the same ...
+
     <div
       className={`flex flex-col h-screen bg-secondary ${isDragOver ? 'border-2 border-dashed border-primary' : ''}`}
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false); }}
       onDrop={handleDrop}>
       <header className='flex justify-between items-center p-4 border-b bg-background'>
-        <h1 className='text-2xl font-bold'>RAG Chat</h1>
+        <h1 className='text-2xl font-bold'>DocuChat</h1>
         <div className="flex items-center gap-4">
           <Button variant='outline' onClick={handleNewChat}>New Chat</Button>
           <ThemeToggle />
@@ -200,7 +228,7 @@ export default function ChatLayout() {
       </main>
       <footer className='p-4 bg-background border-t'>
         {rejectionMessage && <p className="text-sm text-center text-destructive mb-2">{rejectionMessage}</p>}
-        {uploadMessage && <p className="text-sm text-center text-muted-foreground mb-2">{uploadMessage}</p>}
+
         <div className="relative">
           <form onSubmit={customHandleSubmit} ref={formRef}>
             <div className="w-full border rounded-lg p-2 flex flex-col focus-within:ring-2 focus-within:ring-ring bg-background">
