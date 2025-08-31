@@ -22,34 +22,48 @@ interface ProgressMessage {
   attachments: FileAttachment[];
   status: 'uploading' | 'processing' | 'complete';
   createdAt: Date;
+  insertionIndex: number;
 }
 
-export function useExtendedChat(options: { api: string; body?: any }) {
+export function useExtendedChat(options: { api: string; body?: Record<string, unknown> }) {
   const chatHook = useChat(options);
   const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>([]);
+  const [messageOrder, setMessageOrder] = useState<string[]>([]);
 
-
-  const allMessages: ExtendedMessage[] = [
-    ...chatHook.messages,
-    ...progressMessages
-  ].sort((a, b) => {
-    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return timeA - timeB;
+  // Combine messages maintaining insertion order
+  const allMessages: ExtendedMessage[] = [];
+  
+  // Add messages in the order they were created
+  messageOrder.forEach(id => {
+    const regularMsg = chatHook.messages.find(m => m.id === id);
+    const progressMsg = progressMessages.find(m => m.id === id);
+    if (regularMsg) allMessages.push(regularMsg);
+    if (progressMsg) allMessages.push(progressMsg);
+  });
+  
+  // Add any new regular messages not in order yet
+  chatHook.messages.forEach(msg => {
+    if (!messageOrder.includes(msg.id)) {
+      allMessages.push(msg);
+      setMessageOrder(prev => [...prev, msg.id]);
+    }
   });
 
   const addMessageWithProgress = useCallback((content: string, attachments: FileAttachment[], status: string) => {
     const messageId = crypto.randomUUID();
+    
     const progressMessage: ProgressMessage = {
       id: messageId,
       role: 'user',
       content,
       attachments,
-      status: status as any,
-      createdAt: new Date()
+      status: status as 'uploading' | 'processing' | 'complete',
+      createdAt: new Date(),
+      insertionIndex: 0
     };
     
     setProgressMessages(prev => [...prev, progressMessage]);
+    setMessageOrder(prev => [...prev, messageId]);
     return messageId;
   }, []);
 
@@ -57,15 +71,20 @@ export function useExtendedChat(options: { api: string; body?: any }) {
     setProgressMessages(prev => prev.map(msg => 
       msg.id === id ? { 
         ...msg, 
-        status: status as any,
+        status: status as 'uploading' | 'processing' | 'complete',
         ...(content !== undefined && { content })
       } : msg
     ));
   }, []);
 
-  const completeMessageProgress = useCallback((id: string, finalContent?: string) => {
+  const completeMessageProgress = useCallback((id: string) => {
     setProgressMessages(prev => prev.filter(msg => msg.id !== id));
   }, []);
+
+  const clearAllMessages = useCallback(() => {
+    chatHook.setMessages([]);
+    setProgressMessages([]);
+  }, [chatHook]);
 
   const appendWithFiles = useCallback(async (
     content: string, 
@@ -78,10 +97,10 @@ export function useExtendedChat(options: { api: string; body?: any }) {
       attachments
     };
     
-    return chatHook.append(messageWithAttachments as any, { 
+    return chatHook.append(messageWithAttachments, { 
       options: { body: { sessionId: options?.sessionId } } 
     });
-  }, [chatHook.append]);
+  }, [chatHook]);
 
   return {
     ...chatHook,
@@ -89,6 +108,7 @@ export function useExtendedChat(options: { api: string; body?: any }) {
     addMessageWithProgress,
     updateMessageProgress,
     completeMessageProgress,
-    appendWithFiles
+    appendWithFiles,
+    clearAllMessages
   };
 }

@@ -32,11 +32,13 @@ export default function ChatLayout() {
     input, 
     handleInputChange, 
     handleSubmit, 
+    setInput,
     isLoading, 
     addMessageWithProgress,
     updateMessageProgress,
     completeMessageProgress,
-    appendWithFiles
+    appendWithFiles,
+    clearAllMessages
   } = useExtendedChat({
     api: '/api/chat',
     body: { sessionId },
@@ -45,6 +47,7 @@ export default function ChatLayout() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 
   useEffect(() => {
@@ -87,6 +90,7 @@ export default function ChatLayout() {
     }
     if (validFiles.length > 0) {
       setFiles(prevFiles => [...prevFiles, ...validFiles]);
+      setTimeout(() => textareaRef.current?.focus(), 100);
     }
     if (e.target) e.target.value = '';
   };
@@ -96,8 +100,11 @@ export default function ChatLayout() {
   };
 
   const handleNewChat = () => {
+    clearAllMessages();
     setFiles([]);
     setSessionId(null);
+    setRejectionMessage('');
+    setInput('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -117,6 +124,9 @@ export default function ChatLayout() {
 
     const textToSend = input;
     const currentFiles = [...files];
+    
+    // Clear input immediately using useChat's setInput
+    setInput('');
 
     if (files.length > 0) {
 
@@ -256,10 +266,11 @@ export default function ChatLayout() {
                   accept={ALLOWED_FILE_TYPES.join(',')}
                 />
                 <Textarea
+                  ref={textareaRef}
                   value={input}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
-                  placeholder='Type a message or drop files...'
+                  placeholder='Type a message or drop PDFs, images, text files...'
                   rows={1}
                   maxRows={5} 
                   className="flex-1 w-full resize-none bg-transparent p-0 border-0 focus:ring-0 focus:outline-none"

@@ -21,9 +21,9 @@ type MessagesProps = {
 };
 
 const getFileIcon = (type: string) => {
-  if (type.startsWith('image/')) return <Image className="h-3 w-3" />;
-  if (type === 'application/pdf') return <FileText className="h-3 w-3" />;
-  return <File className="h-3 w-3" />;
+  if (type.startsWith('image/')) return <Image className="h-3 w-3" aria-label="Image file" />;
+  if (type === 'application/pdf') return <FileText className="h-3 w-3" aria-label="PDF file" />;
+  return <File className="h-3 w-3" aria-label="File" />;
 };
 
 const formatFileSize = (bytes: number) => {
