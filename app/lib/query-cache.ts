@@ -3,7 +3,28 @@ const queryCache = new Map<string, number[]>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const cacheTimestamps = new Map<string, number>();
 
-export function getCachedEmbedding(query: string): number[] | null {
+interface EmbeddingModel {
+  embedContent?(text: string): Promise<{
+    embedding: {
+      values: number[];
+    };
+  }>;
+}
+
+export async function getCachedEmbedding(query: string, embeddingModel: EmbeddingModel): Promise<number[]> {
+  const cached = getCachedEmbeddingSync(query);
+  if (cached) return cached;
+  
+  if (!embeddingModel.embedContent) {
+    throw new Error('Embedding model does not support embedContent');
+  }
+  const embeddingResult = await embeddingModel.embedContent(query);
+  const embedding = embeddingResult.embedding.values;
+  setCachedEmbedding(query, embedding);
+  return embedding;
+}
+
+function getCachedEmbeddingSync(query: string): number[] | null {
   const cached = queryCache.get(query);
   const timestamp = cacheTimestamps.get(query);
   

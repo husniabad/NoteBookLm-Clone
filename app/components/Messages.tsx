@@ -1,6 +1,5 @@
 'use client';
 
-import { Message } from 'ai';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FileText, Image, File, Upload, Loader2 } from 'lucide-react';
@@ -9,6 +8,11 @@ interface FileAttachment {
   name: string;
   type: string;
   size: number;
+}
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 interface ExtendedMessage extends Message {

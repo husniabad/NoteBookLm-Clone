@@ -50,31 +50,7 @@ const bedrockPixtralClient = {
           const prompt = parts.map((p: { text?: string }) => p.text || p).join('');
           const images = parts.filter((p: { inlineData?: { mimeType: string; data: string } }) => p.inlineData);
           
-          const messages = [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: prompt
-                },
-                ...images.map((img: { inlineData: { mimeType: string; data: string } }) => ({
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: img.inlineData.mimeType,
-                    data: img.inlineData.data
-                  }
-                }))
-              ]
-            }
-          ];
-          
-          const body = {
-            messages: messages,
-            max_tokens: 4000,
-            temperature: 0.7
-          };
+          // Removed unused messages and body variables
           
           const command = new ConverseCommand({
             modelId: 'us.mistral.pixtral-large-2502-v1:0',
