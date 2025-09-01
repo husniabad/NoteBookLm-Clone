@@ -3,7 +3,7 @@ const nextConfig = {
   webpack: (config, { isServer }) => {
     if (isServer) {
       config.externals = config.externals || [];
-      config.externals.push('pdf2pic', 'sharp');
+      config.externals.push('pdf2pic', 'pdf2json', 'sharp');
       
       // Ignore test files and problematic paths
       config.resolve.alias = {
@@ -18,7 +18,7 @@ const nextConfig = {
     }
     return config;
   },
-  serverExternalPackages: ['pdf2pic', 'sharp'],
+  serverExternalPackages: ['pdf2pic', 'pdf2json', 'sharp'],
   experimental: {
     esmExternals: 'loose'
   }
