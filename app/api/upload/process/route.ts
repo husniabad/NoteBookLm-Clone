@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@/app/lib/vercel-postgres";
 import genAI from "@/app/lib/ai-provider";
 import { splitIntoChunks } from "@/app/lib/rag-utils";
-import { put } from "@vercel/blob";
 import pdf2pic from 'pdf2pic';
 import PDFParser from "pdf2json";
 import sharp from 'sharp';
@@ -80,7 +79,6 @@ export async function POST(req: NextRequest) {
           ? await sharp(imageBuffer).resize({ width: 800 }).toBuffer()
           : imageBuffer;
         
-        const blob = await put(`${originalFileName}_page_${i + 1}.png`, resizedBuffer, { access: 'public', addRandomSuffix: true });
         const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/png' } };
         const prompt = `Analyze this image from page ${i + 1} of a PDF. Extract ALL visible details:
 1. Content type (chart, diagram, photo, text, table, etc.)
@@ -97,22 +95,20 @@ Be comprehensive and specific. Format: [Page ${i + 1}] [TYPE: content_type] Comp
           throw new Error('Vision model does not support generateContent');
         }
         const descriptionResult = await visionModel.generateContent([prompt, imagePart]);
-        const richDescription = descriptionResult!.response.text();
-        
-        return { description: richDescription, url: blob.url };
+        return descriptionResult!.response.text();
       });
       
-      const imageResults = (await Promise.all(imagePromises)).filter(Boolean) as { description: string; url: string }[];
+      const descriptions = (await Promise.all(imagePromises)).filter(Boolean) as string[];
       
-      if (imageResults.length > 0) {
+      if (descriptions.length > 0) {
         if (!embeddingModel.embedContent) {
           throw new Error('Embedding model does not support embedContent');
         }
-        const embeddingPromises = imageResults.map(result => embeddingModel.embedContent!(result.description));
+        const embeddingPromises = descriptions.map(desc => embeddingModel.embedContent!(desc));
         const embeddings = await Promise.all(embeddingPromises);
         
-        const insertPromises = imageResults.map((result, i) => 
-          sql`INSERT INTO documents (content, embedding, type, url, session_id, source_file, is_standalone_file) VALUES (${result.description}, ${JSON.stringify(embeddings[i].embedding.values)}, 'image', ${result.url}, ${sessionId}, ${originalFileName}, FALSE)`
+        const insertPromises = descriptions.map((desc, i) => 
+          sql`INSERT INTO documents (content, embedding, type, session_id, source_file, is_standalone_file) VALUES (${desc}, ${JSON.stringify(embeddings[i].embedding.values)}, 'text', ${sessionId}, ${originalFileName}, FALSE)`
         );
         await Promise.all(insertPromises);
       }
