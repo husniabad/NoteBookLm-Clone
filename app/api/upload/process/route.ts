@@ -49,7 +49,6 @@ export async function POST(req: NextRequest) {
         await Promise.all(textInsertPromises);
       }
       
-      // Use pdf2pic for image extraction with proper configuration
       const tempDir = path.join(tmpdir(), `pdf_images_${Date.now()}`);
       await fs.mkdir(tempDir, { recursive: true });
       
@@ -65,11 +64,13 @@ export async function POST(req: NextRequest) {
         height: 550,
       };
 
+      console.log('Attempting pdf2pic conversion...');
       const convert = pdf2pic.fromPath(tempPdfPath, options);
+      console.log('pdf2pic convert object created');
       const results = await convert.bulk(-1, { responseType: "image" });
+      console.log('pdf2pic conversion completed, results:', results.length);
       
       const imagePromises = results.map(async (result: { path?: string }, i: number) => {
-        // Add delay to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, i * 1000));
         if (!result.path) return null;
         
@@ -113,7 +114,6 @@ Be comprehensive and specific. Format: [Page ${i + 1}] [TYPE: content_type] Comp
         await Promise.all(insertPromises);
       }
       
-      // Clean up temp directory
       await fs.rm(tempDir, { recursive: true, force: true });
     } 
     else if (fileType.startsWith('image/')) {
