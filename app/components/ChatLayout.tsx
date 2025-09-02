@@ -389,10 +389,10 @@ export default function ChatLayout() {
           <div key={message.id} data-message-id={message.id} className={`mb-4 ${message.role === 'user' ? 'flex justify-end' : 'flex justify-start'} ${
             message.isLatestUserMessage ? 'scroll-mt-4' : ''
           }`}>
-            <div className={`max-w-3xl p-3 rounded-lg ${
+            <div className={`p-3 rounded-lg ${
               message.role === 'user' 
-                ? 'bg-primary text-primary-foreground' 
-                : 'bg-card text-card-foreground border'
+                ? 'bg-primary text-primary-foreground max-w-[calc(100%-3rem)] md:max-w-[75%]' 
+                : 'bg-card text-card-foreground border max-w-[calc(100%-1.5rem)]'
             }`}>
               {message.role === 'user' && (
                 <>
@@ -408,7 +408,7 @@ export default function ChatLayout() {
                       <span>
                         {message.status === 'uploading' && 'Uploading...'}
                         {message.status === 'processing' && 'Processing...'}
-                        {message.status === 'analysis' && 'Files uploaded, starting analysis...'}
+                        {message.status === 'analysis' && 'Files uploaded, Start analysis now!'}
                       </span>
                     </div>
                   )}
