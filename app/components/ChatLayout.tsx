@@ -180,7 +180,7 @@ export default function ChatLayout() {
       formData.append('sessionId', currentSessionId!);
 
       try {
-        const uploadResponse = await fetch('/api/upload/start', {
+        const uploadResponse = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
         });
@@ -218,7 +218,7 @@ export default function ChatLayout() {
       formData.append('sessionId', currentSessionId!);
 
       try {
-        const uploadResponse = await fetch('/api/upload/start', {
+        const uploadResponse = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
         });

@@ -47,10 +47,10 @@ export default function Messages({ messages }: MessagesProps) {
           }`}
         >
           <div
-            className={`p-3 rounded-lg max-w-lg ${
+            className={`p-3 rounded-lg ${
               msg.role === 'user'
-                ? 'bg-violet-600 text-white'
-                : 'bg-gray-200 text-gray-800'
+                ? 'bg-violet-600 text-white max-w-[80%] md:max-w-lg'
+                : 'bg-gray-200 text-gray-800 max-w-[85%] md:max-w-lg'
             }`}
           >
             {msg.role === 'user' ? (
