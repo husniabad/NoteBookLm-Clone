@@ -33,6 +33,42 @@ const bedrockClient = {
       };
     }
     
+    if (model === 'gemini-1.5-flash') {
+      return {
+        async generateContent(request: unknown) {
+          const parts = Array.isArray(request) ? request : (request as { contents?: { parts?: unknown[] }[] })?.contents?.[0]?.parts;
+          if (!parts) throw new Error('Invalid request format');
+          
+          const prompt = parts.map((p: { text?: string }) => p.text || p).join('');
+          
+          const body = {
+            messages: [{
+              role: "user",
+              content: [{ text: prompt }]
+            }],
+            inferenceConfig: {
+              max_new_tokens: 2000,
+              temperature: 0.3
+            }
+          };
+          
+          const command = new InvokeModelCommand({
+            modelId: 'us.amazon.nova-micro-v1:0',
+            body: JSON.stringify(body),
+          });
+          
+          const response = await client.send(command);
+          const result = JSON.parse(new TextDecoder().decode(response.body));
+          
+          return {
+            response: {
+              text: () => result.output?.message?.content?.[0]?.text || 'No response generated'
+            }
+          };
+        }
+      };
+    }
+    
     if (model === 'gemini-1.5-pro-latest') {
       return {
         async generateContent(request: unknown) {

@@ -3,10 +3,10 @@
 import { useState, useRef, FormEvent, useEffect, ChangeEvent, DragEvent, KeyboardEvent } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import Textarea from 'react-textarea-autosize';
-import { Paperclip, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import TextareaAutosize from './ui/textarea-autosize';
+import { Paperclip, XCircle, Loader2} from 'lucide-react';
 import { ThemeToggle } from './theme-toggle';
-import ReactMarkdown from 'react-markdown';
+import Message from './Message';
 
 const ALLOWED_FILE_TYPES = [
   'application/pdf',
@@ -15,6 +15,15 @@ const ALLOWED_FILE_TYPES = [
   'image/png',
   'image/jpeg',
 ];
+
+interface Citation {
+  source_file: string;
+  page_number?: number;
+  content_snippet: string;
+  blob_url?: string;
+  full_content?: string;
+  quoted_chunks?: string[];
+}
 
 interface Message {
   id: number;
@@ -28,6 +37,7 @@ interface Message {
   currentStep?: string;
   isExpanded?: boolean;
   isLatestUserMessage?: boolean;
+  citations?: Citation[];
 }
 
 export default function ChatLayout() {
@@ -288,18 +298,26 @@ export default function ChatLayout() {
       
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
       
       while (reader) {
         const { done, value } = await reader.read();
         if (done) break;
         
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
         
         for (const line of lines) {
           if (line.startsWith('data: ') && line.slice(6).trim()) {
+            const jsonStr = line.slice(6).trim();
+            
+            if (!jsonStr.startsWith('{') || !jsonStr.endsWith('}')) {
+              continue;
+            }
+            
             try {
-              const data = JSON.parse(line.slice(6));
+              const data = JSON.parse(jsonStr);
               
               if (data.type === 'thinking') {
                 setMessages(prev => prev.map(msg => 
@@ -309,12 +327,20 @@ export default function ChatLayout() {
                     searchSteps: [...(msg.searchSteps || []), data.step]
                   } : msg
                 ));
+              } else if (data.type === 'partial_response') {
+                setMessages(prev => prev.map(msg => 
+                  msg.id === thinkingId ? {
+                    ...msg,
+                    content: (msg.content || '') + data.content,
+                    isThinking: false
+                  } : msg
+                ));
               } else if (data.type === 'response') {
-                // Update message with final response, keep thinking collapsed
                 setMessages(prev => prev.map(msg => 
                   msg.id === thinkingId ? {
                     ...msg,
                     content: data.response,
+                    citations: data.citations,
                     searchSteps: data.searchSteps,
                     isComplex: data.isComplex,
                     isThinking: false,
@@ -325,7 +351,7 @@ export default function ChatLayout() {
                 setIsWaitingResponse(false);
               }
             } catch (e) {
-              console.error('Error parsing SSE data:', e);
+              console.warn('Skipping malformed JSON:', jsonStr.substring(0, 50));
             }
           }
         }
@@ -338,7 +364,8 @@ export default function ChatLayout() {
           content: 'Sorry, an error occurred while processing your request.',
           isThinking: false,
           isExpanded: false,
-          currentStep: undefined
+          currentStep: undefined,
+          citations: []
         } : msg
       ));
     } finally {
@@ -386,125 +413,15 @@ export default function ChatLayout() {
       </header>
       <main className='flex-1 overflow-y-auto p-4'>
         {messages.map((message) => (
-          <div key={message.id} data-message-id={message.id} className={`mb-4 ${message.role === 'user' ? 'flex justify-end' : 'flex justify-start'} ${
-            message.isLatestUserMessage ? 'scroll-mt-4' : ''
-          }`}>
-            <div className={`p-3 rounded-lg ${
-              message.role === 'user' 
-                ? 'bg-primary text-primary-foreground max-w-[calc(100%-3rem)] md:max-w-[75%]' 
-                : 'bg-card text-card-foreground border max-w-[calc(100%-1.5rem)]'
-            }`}>
-              {message.role === 'user' && (
-                <>
-                  {message.content && <div>{message.content}</div>}
-                  {message.files && message.files.length > 0 && (
-                    <div className="mt-2 text-sm opacity-80">
-                      📎 {message.files.map(f => f.name).join(', ')}
-                    </div>
-                  )}
-                  {message.status && message.status !== 'complete' && (
-                    <div className="mt-2 flex items-center space-x-2 text-sm opacity-70">
-                      {message.status !== 'analysis' && <Loader2 className="h-3 w-3 animate-spin" />}
-                      <span>
-                        {message.status === 'uploading' && 'Uploading...'}
-                        {message.status === 'processing' && 'Processing...'}
-                        {message.status === 'analysis' && 'Files uploaded, Start analysis now!'}
-                      </span>
-                    </div>
-                  )}
-                </>
-              )}
-              {message.role === 'assistant' && (
-                <>
-                  {message.isThinking ? (
-                    <div className="w-full">
-                      <div className="flex items-center justify-between p-2 bg-muted/30 rounded-t border">
-                        <div className="flex items-center space-x-2 flex-1 min-w-0">
-                          <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
-                          <span className="text-sm font-medium flex-shrink-0">Thinking...</span>
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={() => {
-                            setMessages(prev => prev.map(msg => 
-                              msg.id === message.id ? { ...msg, isExpanded: !msg.isExpanded } : msg
-                            ));
-                          }}
-                          className="h-6 w-6 p-0 flex-shrink-0"
-                        >
-                          {message.isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                        </Button>
-                      </div>
-                      <div className="p-2 bg-muted/10 border-x border-b rounded-b">
-                        <div className="text-sm text-muted-foreground truncate">
-                          {message.currentStep}
-                        </div>
-                        <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
-                          message.isExpanded ? 'max-h-96 opacity-100 mt-2' : 'max-h-0 opacity-0'
-                        }`}>
-                          {message.searchSteps && message.searchSteps.length > 0 && (
-                            <div className="p-2 bg-muted/50 rounded text-xs space-y-1">
-                              {message.searchSteps.map((step, i) => (
-                                <div key={i} className="text-muted-foreground">
-                                  {i === 0 && '🤔 '}
-                                  {i > 0 && i < message.searchSteps!.length - 1 && '🔍 '}
-                                  {i === message.searchSteps!.length - 1 && '✅ '}
-                                  {step}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {message.searchSteps && message.searchSteps.length > 0 && (
-                        <div className="mb-3 w-full">
-                          <div className="flex items-center justify-between p-2 bg-muted/30 rounded-t border">
-                            <div className="font-medium truncate flex-1">
-                              {message.isComplex ? '🧠 Complex Query Analysis' : '🔍 Search Process'}
-                            </div>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => {
-                                setMessages(prev => prev.map(msg => 
-                                  msg.id === message.id ? { ...msg, isExpanded: !msg.isExpanded } : msg
-                                ));
-                              }}
-                              className="h-6 w-6 p-0 flex-shrink-0"
-                            >
-                              {message.isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                            </Button>
-                          </div>
-                          <div className={`overflow-hidden transition-all duration-300 ease-in-out border-x border-b rounded-b bg-muted/10 ${
-                            message.isExpanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
-                          }`}>
-                            <div className="p-2 space-y-1">
-                              {message.searchSteps.map((step, i) => (
-                                <div key={i} className="text-muted-foreground text-sm">
-                                  {i === 0 && '🤔 '}
-                                  {i > 0 && i < message.searchSteps!.length - 1 && '🔍 '}
-                                  {i === message.searchSteps!.length - 1 && '✅ '}
-                                  {step}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {message.content && (
-                        <div className="prose max-w-none dark:prose-invert prose-sm">
-                          <ReactMarkdown>{message.content}</ReactMarkdown>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </>
-              )}
-            </div>
+          <div key={message.id} data-message-id={message.id}>
+            <Message 
+              message={message} 
+              onToggleExpanded={(messageId) => {
+                setMessages(prev => prev.map(msg => 
+                  msg.id === messageId ? { ...msg, isExpanded: !msg.isExpanded } : msg
+                ));
+              }}
+            />
           </div>
         ))}
 
@@ -519,7 +436,7 @@ export default function ChatLayout() {
 
         <div className="relative">
           <form onSubmit={customHandleSubmit} ref={formRef}>
-            <div className="w-full border rounded-lg p-2 flex flex-col focus-within:ring-2 focus-within:ring-ring bg-background">
+            <div className="w-full border rounded-lg p-2 flex flex-col bg-background">
               <div className="flex flex-wrap gap-2 mb-2 px-2">
                 {files.map((file, index) => (
                   <div key={index} className='flex items-center bg-secondary text-secondary-foreground py-1 px-2 rounded-md'>
@@ -543,15 +460,15 @@ export default function ChatLayout() {
                   disabled={formIsDisabled}
                   accept={ALLOWED_FILE_TYPES.join(',')}
                 />
-                <Textarea
+                <TextareaAutosize
                   ref={textareaRef}
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder='Type a message or drop PDFs, images, text files...'
-                  rows={1}
+                  minRows={1}
                   maxRows={5} 
-                  className="flex-1 w-full resize-none bg-transparent p-0 border-0 focus:ring-0 focus:outline-none"
+                  className="flex-1 w-full resize-none bg-transparent border-0 focus:ring-0 focus:outline-none flex items-center"
                   disabled={formIsDisabled}
                 />
                 <Button type='submit' disabled={formIsDisabled || (!inputValue.trim() && files.length === 0)}>

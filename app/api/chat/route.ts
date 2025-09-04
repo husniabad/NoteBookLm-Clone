@@ -4,12 +4,15 @@ import genAI from '@/app/lib/ai-provider';
 import { getCachedEmbedding } from '@/app/lib/query-cache';
 import { Part } from '@google/generative-ai';
 
+
 interface Document {
+  id: number;
   content: string;
   type: 'text' | 'image';
   url?: string;
   created_at?: string;
   source_file?: string;
+  page_number?: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -29,7 +32,7 @@ export async function POST(req: NextRequest) {
 
         // Get recent conversation context
         const recentFileCheck = await sql`
-          SELECT content, type, created_at
+          SELECT id, content, type, created_at, source_file, page_number, url
           FROM documents 
           WHERE session_id = ${sessionId}
           ORDER BY created_at DESC
@@ -52,8 +55,13 @@ export async function POST(req: NextRequest) {
           conversationHistory.rows.reverse().map(msg => `${msg.role.toUpperCase()}: ${msg.content}`).join('\n') : '';
         
         // Simple pattern matching for standalone file queries
-        const standalonePatterns = ['this file', 'this image', 'what is in this', 'what is i this', 'latest image', 'attached file'];
+        const standalonePatterns = ['this file', 'this image', 'what is in this', 'what is i this', 'latest image', 'attached file', 'what is in', 'content of'];
         const isStandaloneQuery = standalonePatterns.some(pattern => message.toLowerCase().includes(pattern));
+        
+        // Check if asking about specific file by name
+        const fileNamePattern = /what is in ([^?]+)/i;
+        const fileNameMatch = message.match(fileNamePattern);
+        const specificFileName = fileNameMatch ? fileNameMatch[1].trim() : null;
         
         // Analyze query complexity and context
         const analysisPrompt = `Analyze this query considering:
@@ -68,7 +76,9 @@ Respond with JSON containing:
 - focusRecent: boolean (true if query uses words like "this image", "this file", "this document", "the image", "what is in the image", or seems to reference the most recent upload)
 - isAboutLatestFile: boolean (true if asking about "the image", "this image", "what is in the image", "latest file", "attached file", "this file" when a standalone file was just uploaded)
 - isFollowUp: boolean (true if this seems to be a follow-up question about something mentioned in recent conversation)
-- expandedTerms: string[] (list of synonyms and related terms for the main query terms)`;
+- expandedTerms: string[] (list of synonyms and related terms for the main query terms)
+- needsSpecificQuotes: boolean (true if asking for specific quotes, exact text, or "what does it say about")
+- isAnalysisQuery: boolean (true if analyzing multiple documents or comparing content)`;
 
         let analysis;
         if (!visionModel.generateContent) {
@@ -91,9 +101,14 @@ Respond with JSON containing:
         // Prioritize recent files if query references them
         let searchLimit = 5;
         
-        if (analysis.focusStandaloneOnly) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'thinking', step: 'Focusing ONLY on the latest standalone file...' })}\n\n`));
-          searchLimit = 1; // Only the latest file
+        if (analysis.focusStandaloneOnly || specificFileName || message.toLowerCase().includes('image')) {
+          const stepMsg = specificFileName 
+            ? `Focusing on "${specificFileName}"...` 
+            : message.toLowerCase().includes('image') 
+            ? 'Focusing on the uploaded image...'
+            : 'Focusing ONLY on the latest standalone file...';
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'thinking', step: stepMsg })}\n\n`));
+          searchLimit = 5; // Allow more results for images
         } else if (analysis.focusRecent || analysis.isAboutLatestFile) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'thinking', step: 'Focusing on the most recently uploaded file...' })}\n\n`));
           searchLimit = 3; // Focus heavily on recent content
@@ -121,19 +136,19 @@ Respond with JSON containing:
             }
             const embedding = await getCachedEmbedding(query, embeddingModel);
             const searchResult = analysis.focusStandaloneOnly ? await sql<Document>`
-              SELECT content, type, url, created_at, source_file
+              SELECT id, content, type, url, created_at, source_file, page_number
               FROM documents 
               WHERE session_id = ${sessionId} AND is_standalone_file = TRUE
               ORDER BY created_at DESC
               LIMIT 1
             ` : (analysis.focusRecent || analysis.isAboutLatestFile) ? await sql<Document>`
-              SELECT content, type, url, created_at, source_file
+              SELECT id, content, type, url, created_at, source_file, page_number
               FROM documents 
               WHERE session_id = ${sessionId}
               ORDER BY created_at DESC, embedding <=> ${JSON.stringify(embedding)}::vector 
               LIMIT ${searchLimit / analysis.subQueries.length}
             ` : await sql<Document>`
-              SELECT content, type, url, created_at, source_file
+              SELECT id, content, type, url, created_at, source_file, page_number
               FROM documents 
               WHERE session_id = ${sessionId}
               ORDER BY embedding <=> ${JSON.stringify(embedding)}::vector 
@@ -146,13 +161,23 @@ Respond with JSON containing:
           searchSteps.push("Searching with expanded terms...");
           
           if (analysis.focusStandaloneOnly) {
-            // For standalone files, just get the latest one without any embedding search
+            // Get only the single most recent file for "this file" queries
             const searchResult = await sql<Document>`
-              SELECT content, type, url, created_at, source_file
+              SELECT id, content, type, url, created_at, source_file, page_number
               FROM documents 
-              WHERE session_id = ${sessionId} AND is_standalone_file = TRUE
+              WHERE session_id = ${sessionId}
               ORDER BY created_at DESC
               LIMIT 1
+            `;
+            contextDocs = searchResult.rows;
+          } else if (specificFileName || message.toLowerCase().includes('image')) {
+            // Get recent documents for specific file or image queries
+            const searchResult = await sql<Document>`
+              SELECT id, content, type, url, created_at, source_file, page_number
+              FROM documents 
+              WHERE session_id = ${sessionId}
+              ORDER BY created_at DESC
+              LIMIT 5
             `;
             contextDocs = searchResult.rows;
           } else {
@@ -164,13 +189,13 @@ Respond with JSON containing:
               }
               const embedding = await getCachedEmbedding(term, embeddingModel);
               const searchResult = (analysis.focusRecent || analysis.isAboutLatestFile) ? await sql<Document>`
-                SELECT content, type, url, created_at, source_file
+                SELECT id, content, type, url, created_at, source_file, page_number
                 FROM documents 
                 WHERE session_id = ${sessionId}
                 ORDER BY created_at DESC, embedding <=> ${JSON.stringify(embedding)}::vector 
                 LIMIT ${Math.ceil(searchLimit / searchTerms.length)}
               ` : await sql<Document>`
-                SELECT content, type, url, created_at, source_file
+                SELECT id, content, type, url, created_at, source_file, page_number
                 FROM documents 
                 WHERE session_id = ${sessionId}
                 ORDER BY embedding <=> ${JSON.stringify(embedding)}::vector 
@@ -191,24 +216,6 @@ Respond with JSON containing:
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'thinking', step: finalStep })}\n\n`));
         searchSteps.push(finalStep);
 
-        // Build enhanced context for final answer
-        const systemInstruction = `You are a document analysis assistant. Answer based on the provided documents, but you can use basic common knowledge for obvious inferences. Rules:
-1. Answer based on what's in the uploaded documents
-2. Use basic common knowledge for clear inferences (e.g., Bangalore is in India, phone numbers indicate countries)
-3. If user asks about something using different terms, find the closest match in documents
-4. If information isn't in documents and can't be reasonably inferred, say "This information is not found in your uploaded documents"
-5. Be helpful with obvious connections and basic geographical/factual knowledge`;
-        
-        const conversationContext = recentConversation ? `\n--- RECENT CONVERSATION ---\n${recentConversation}\n--- END CONVERSATION ---` : '';
-        
-        const contextSummary = analysis.focusRecent ? 
-          `\n--- RECENT FILE CONTEXT (prioritized) ---` : 
-          `\n--- DOCUMENT CONTEXT ---`;
-          
-        const promptParts: Part[] = [
-          { text: `${systemInstruction}${conversationContext}\n\nUser Question: "${message}"${contextSummary}` }
-        ];
-
         // Sort all context docs by creation time (newest first)
         const sortedDocs = contextDocs.sort((a, b) => {
           if (!a.created_at || !b.created_at) return 0;
@@ -218,59 +225,201 @@ Respond with JSON containing:
         // If asking about latest standalone file, use only that file's content
         let orderedDocs;
         if (analysis.focusStandaloneOnly) {
-          // Use only the single most recent document (should be exactly 1)
           orderedDocs = contextDocs;
         } else if (analysis.isAboutLatestFile) {
-          // Take only the top 3 newest documents
           orderedDocs = sortedDocs.slice(0, 3);
         } else if (analysis.focusRecent) {
-          // Prioritize newer docs but include older ones
           orderedDocs = sortedDocs;
         } else {
           orderedDocs = contextDocs;
         }
         
+        // Build context with document IDs for citation tracking
+        let contextText = `You are a document analysis assistant. Answer based on the provided documents.
+
+CRITICAL CITATION RULE: You MUST include [SOURCE: filename] immediately after EVERY piece of information you reference from the documents.
+
+Examples:
+- "Jack shouted 'Mother! Help!' [SOURCE: short-stories-jack-and-the-beanstalk-transcript.pdf]"
+- "The revenue was $2.5 million [SOURCE: quarterly-report.pdf, Page 3]"
+
+User Question: "${message}"
+
+--- DOCUMENT CONTEXT ---
+`;
+        
         for (const doc of orderedDocs) {
-          if (doc.type === 'image') {
-            promptParts.push({ text: `\n[IMAGE] ${doc.content}` });
-          } else {
-            promptParts.push({ text: `\n[TEXT] ${doc.content}` });
-          }
+          contextText += `\n[FILE: ${doc.source_file}] [PAGE: ${doc.page_number || 1}] [DOC_ID: ${doc.id}]\n${doc.content}\n`;
         }
         
-        let responseGuidance;
-        if (analysis.isFollowUp && recentConversation) {
-          responseGuidance = "\n--- END CONTEXT ---\n\nAnswer based on the documents above. You can make basic common sense inferences (e.g., Bangalore is in India). Be helpful with obvious connections.";
-        } else if (analysis.focusStandaloneOnly) {
-          responseGuidance = "\n--- END CONTEXT ---\n\nSTRICT: Answer ONLY about the single file shown above. Do NOT mention any other documents, addresses, or previous content. Focus exclusively on this one file.";
-        } else if (analysis.isAboutLatestFile) {
-          responseGuidance = "\n--- END CONTEXT ---\n\nAnswer using document content. You can use basic common knowledge for clear inferences from the document information.";
-        } else if (analysis.focusRecent) {
-          responseGuidance = "\n--- END CONTEXT ---\n\nUse document content and basic common knowledge for obvious inferences. Be helpful with clear connections.";
-        } else {
-          responseGuidance = "\n--- END CONTEXT ---\n\nAnswer using the document content. You can make basic common sense inferences from the information provided. If truly not available, say so.";
-        }
-          
-        promptParts.push({ text: responseGuidance });
+        contextText += `\n--- END CONTEXT ---
+
+Answer the question using the documents above. Remember: Include [SOURCE: filename] or [SOURCE: filename, Page X] after EVERY fact you reference.${analysis.needsSpecificQuotes ? ' When quoting exact text, use quotation marks and cite the source.' : ''}`;
+
+        // Use your existing AI provider system
+        const promptParts: Part[] = [
+          { text: contextText }
+        ];
 
         if (!visionModel.generateContent) {
           throw new Error('Vision model does not support generateContent');
         }
         const finalResult = await visionModel.generateContent(promptParts);
         const finalAnswer = finalResult?.response?.text ? finalResult.response.text() : 'Sorry, I could not generate a response.';
+        
+        // Create citations with exact document content
+        interface Citation {
+          source_file: string;
+          page_number?: number;
+          content_snippet: string;
+          blob_url?: string;
+          chunk_id?: number;
+          specific_content?: string;
+          citation_id?: string;
+          citation_index?: number;
+        }
+
+        const citations: Citation[] = [];
+        const extractPattern = /\[SOURCE: ([^\]]+)\]/g;
+        let match;
+        
+        while ((match = extractPattern.exec(finalAnswer)) !== null) {
+          const parts = match[1].split(', ');
+          const sourceFile = parts[0];
+          const pageMatch = parts.find(p => p.startsWith('Page '));
+          const pageNumber = pageMatch ? parseInt(pageMatch.replace('Page ', '')) : undefined;
+          
+          // Extract context snippet for this specific citation
+          const beforeText = finalAnswer.substring(0, match.index);
+          const afterText = finalAnswer.substring(match.index + match[0].length);
+          
+          const sentenceStart = Math.max(
+            beforeText.lastIndexOf('. '),
+            beforeText.lastIndexOf('\n'),
+            beforeText.lastIndexOf(': '),
+            Math.max(0, match.index - 200)
+          );
+          const sentenceEnd = Math.min(
+            afterText.indexOf('. ') !== -1 ? match.index + match[0].length + afterText.indexOf('. ') + 1 : finalAnswer.length,
+            afterText.indexOf('\n') !== -1 ? match.index + match[0].length + afterText.indexOf('\n') : finalAnswer.length,
+            match.index + match[0].length + 200
+          );
+          
+          let contextSnippet = finalAnswer.substring(sentenceStart, sentenceEnd)
+            .replace(/\[SOURCE: [^\]]+\]/g, '')
+            .trim();
+          
+          if (contextSnippet.length < 20) {
+            contextSnippet = finalAnswer.substring(
+              Math.max(0, match.index - 100),
+              Math.min(finalAnswer.length, match.index + match[0].length + 100)
+            ).replace(/\[SOURCE: [^\]]+\]/g, '').trim();
+          }
+          
+          // Find the most relevant source document chunk for this specific context
+          let bestSourceDoc = null;
+          let bestScore = 0;
+          
+          // Get all docs from this source file
+          const sourceDocs = orderedDocs.filter(doc => 
+            doc.source_file === sourceFile && 
+            (!pageNumber || doc.page_number === pageNumber)
+          );
+          
+          
+          // Find the doc chunk that best matches this citation context
+          for (const doc of sourceDocs) {
+            if (!doc.content) continue;
+            
+            const docContent = doc.content.toLowerCase();
+            const contextWords = contextSnippet.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
+            
+            let score = 0;
+            
+            // Score based on exact phrase matches
+            for (let len = 5; len >= 3; len--) {
+              for (let i = 0; i <= contextWords.length - len; i++) {
+                const phrase = contextWords.slice(i, i + len).join(' ');
+                if (docContent.includes(phrase)) {
+                  score += len * 15;
+                }
+              }
+            }
+            
+            // Score based on individual word matches
+            for (const word of contextWords) {
+              if (docContent.includes(word)) {
+                score += word.length * 2;
+              }
+            }
+            
+            if (score > bestScore) {
+              bestScore = score;
+              bestSourceDoc = doc;
+            }
+          }
+                   
+          // Use the best matching doc or fallback to first available
+          const sourceDoc = bestSourceDoc || sourceDocs[0];
+          
+          if (!bestSourceDoc) {
+          }
+          
+          if (sourceDoc?.url) {
+            
+            citations.push({
+              source_file: sourceFile,
+              page_number: sourceDoc.page_number || pageNumber,
+              content_snippet: contextSnippet,
+              blob_url: sourceDoc.url,
+              chunk_id: sourceDoc.id,
+              specific_content: sourceDoc.content,
+              citation_id: `${sourceDoc.id}-${Date.now()}-${Math.random()}`, // Unique ID for each citation
+              citation_index: citations.length // Track the order of citations
+            });
+          }
+        }
+
 
         // Store conversation messages
         try {
           await sql`INSERT INTO chat_messages (session_id, role, content) VALUES (${sessionId}, 'user', ${message})`;
           await sql`INSERT INTO chat_messages (session_id, role, content) VALUES (${sessionId}, 'assistant', ${finalAnswer})`;
         } catch {
-          console.log('Note: Could not store chat messages (table may not exist)');
         }
 
-        // Send final response
+        // Process response to replace citation tags with numbers
+        let processedAnswer = finalAnswer;
+        const sourceMap = new Map<string, number>();
+        let sourceCounter = 1;
+        let citationInstanceCounter = 0;
+        
+        // Create source mapping and track citation instances
+        citations.forEach(citation => {
+          if (!sourceMap.has(citation.source_file)) {
+            sourceMap.set(citation.source_file, sourceCounter++);
+          }
+        });
+        
+        // Replace [SOURCE: ...] with superscript numbers, adding instance tracking
+        const replacementPattern = /\[SOURCE: ([^\]]+)\]/g;
+        processedAnswer = processedAnswer.replace(replacementPattern, (sourceInfo: string) => {
+          const parts = sourceInfo.split(', ');
+          const sourceFile = parts[0];
+          const sourceNumber = sourceMap.get(sourceFile) || 1;
+          const instanceId = citationInstanceCounter++;
+          return `<sup data-citation-instance="${instanceId}">[${sourceNumber}]</sup>`;
+        });
+        
+        // Debug: Log final citations being sent
+        citations.forEach(() => {
+        });
+        
+        // Send final response with citations
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ 
           type: 'response', 
-          response: finalAnswer,
+          response: processedAnswer,
+          citations: citations,
           searchSteps,
           isComplex: analysis.isComplex
         })}\n\n`));

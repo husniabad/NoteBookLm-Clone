@@ -24,8 +24,14 @@ const geminiClient = {
       };
     }
     
-    // For other models, use original client
-    return client.getGenerativeModel({ model });
+    // Map model names to actual Gemini models
+    const modelMap: { [key: string]: string } = {
+      'gemini-1.5-flash': 'gemini-1.5-flash-latest',
+      'gemini-1.5-pro': 'gemini-1.5-pro-latest'
+    };
+    
+    const actualModel = modelMap[model] || model;
+    return client.getGenerativeModel({ model: actualModel });
   }
 };
 
