@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@adobe/pdfservices-node-sdk": "^4.1.0",
     "@ai-sdk/google": "^2.0.11",
     "@ai-sdk/openai": "^2.0.23",
     "@aws-sdk/client-bedrock-runtime": "^3.879.0",
@@ -21,12 +22,14 @@
     "canvas": "^3.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "convertapi-js": "~1.1",
     "dotenv": "^17.2.1",
     "drizzle-orm": "^0.44.5",
     "groq-sdk": "^0.30.0",
     "lucide-react": "^0.542.0",
     "next": "15.5.2",
     "next-themes": "^0.4.6",
+    "node-fetch": "^3.3.2",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdf2json": "^3.2.0",

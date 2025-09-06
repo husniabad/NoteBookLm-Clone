@@ -146,10 +146,15 @@ export default function Message({ message, onToggleExpanded }: MessageProps) {
                     </div>
                   )}
                   {message.content && (
-                    <div className="prose max-w-none dark:prose-invert prose-sm">
+                    <div className="prose max-w-none dark:prose-invert prose-sm [&_mark]:bg-muted [&_mark]:text-foreground [&_mark]:font-semibold [&_mark]:rounded [&_mark]:px-1 [&_mark]:py-0.5">
                       <ReactMarkdown 
                         rehypePlugins={[rehypeRaw]}
                         components={{
+                          mark: ({ children }) => (
+                            <mark className="bg-muted text-foreground font-semibold rounded px-1 py-0.5">
+                              {children}
+                            </mark>
+                          ),
                           sup: ({ children, ...props }: { children?: React.ReactNode; 'data-citation-instance'?: string }) => {
                             // Extract citation number and instance ID
                             const citationText = children?.toString() || '';

@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Loader2 } from 'lucide-react';
-import Highlighter from 'react-highlight-words';
+
 
 interface Citation {
   source_file: string;
@@ -16,6 +16,8 @@ interface Citation {
   chunk_id?: number;
   citation_id?: string;
   citation_index?: number;
+  highlight_phrases?: string[];
+  highlighted_html?: string;
 }
 
 interface CitationPopoverProps {
@@ -27,6 +29,7 @@ interface PreviewCache {
   [key: string]: {
     fullContent: string;
     highlightPhrases: string[];
+    highlightedHtml?: string;
   };
 }
 
@@ -40,8 +43,7 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [imageLoading, setImageLoading] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
-  const [cachedContent, setCachedContent] = useState<{ fullContent: string; highlightPhrases: string[] } | null>(null);
+  const [cachedContent, setCachedContent] = useState<{ fullContent: string; highlightPhrases: string[]; highlightedHtml?: string } | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [popupWidth, setPopupWidth] = useState(320);
   const [popupHeight, setPopupHeight] = useState(200);
@@ -50,9 +52,9 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
 
   
   // Global cache for preview data - use unique citation ID
-  const getCacheKey = () => {
+  const getCacheKey = useCallback(() => {
     return citation.citation_id || `${citation.chunk_id}-${citation.content_snippet?.substring(0, 50)}`;
-  };
+  }, [citation.citation_id, citation.chunk_id, citation.content_snippet]);
   
   useEffect(() => {
     const cacheKey = getCacheKey();
@@ -60,7 +62,7 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
     if (cached) {
       setCachedContent(cached);
     }
-  }, []);
+  }, [getCacheKey]);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
@@ -133,43 +135,26 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
           return;
         }
         
-        setIsLoading(true);
+        // Use direct content from citation (no API call needed)
+        const fullContent = citation.specific_content || citation.content_snippet || 'Content not available';
         
-             
-        // Fetch content from preview API
-        try {
-          const response = await fetch('/api/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              blobUrl: citation.blob_url,
-              sourceFile: citation.source_file,
-              contextSnippet: citation.content_snippet,
-              pageNumber: citation.page_number,
-              specificContent: citation.specific_content
-            })
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            const content = {
-              fullContent: data.fullContent,
-              highlightPhrases: data.highlightPhrases
-            };
-            
-            // Cache the content
-            if (!window.previewCache) {
-              window.previewCache = {};
-            }
-            window.previewCache[cacheKey] = content;
-            
-            setCachedContent(content);
-          }
-        } catch (error) {
-          console.error(`Failed to fetch preview for chunk ${citation.chunk_id}:`, error);
-        } finally {
-          setIsLoading(false);
+        // Use pre-calculated highlight phrases from chat API
+        const highlightPhrases = citation.highlight_phrases || [];
+        const highlightedHtml = citation.highlighted_html || '';
+        
+        const content = {
+          fullContent: fullContent,
+          highlightPhrases: highlightPhrases,
+          highlightedHtml: highlightedHtml
+        };
+        
+        // Cache the content
+        if (!window.previewCache) {
+          window.previewCache = {};
         }
+        window.previewCache[cacheKey] = content;
+        
+        setCachedContent(content);
       }
     };
     
@@ -230,7 +215,7 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
         </div>
         
         <div className={`overflow-auto ${
-          citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'p-1 h-full' : 'flex-1 p-4'
+          citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'p-1 h-full' : 'flex-1 p-3'
         }`}>
           {citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
             <div className="relative h-full" style={{ width: 'auto', minWidth: '0' }}>
@@ -255,20 +240,17 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
                 <span className="text-muted-foreground">Image preview not available</span>
               )}
             </div>
-          ) : isLoading ? (
-            <div className="flex items-center justify-center h-32">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-muted-foreground">Loading preview...</span>
-            </div>
           ) : cachedContent ? (
-            <div className="overflow-auto whitespace-pre-wrap text-sm leading-relaxed" style={{ maxHeight: `${popupHeight - 100}px` }}>
-              <Highlighter
-                highlightClassName="bg-muted text-foreground font-semibold rounded px-1 py-0.5"
-                searchWords={cachedContent.highlightPhrases}
-                autoEscape={true}
-                textToHighlight={cachedContent.fullContent}
-                caseSensitive={false}
-              />
+            <div className="overflow-auto text-sm leading-relaxed" style={{ maxHeight: `${popupHeight - 100}px` }}>
+              {(() => {
+                const htmlToRender = cachedContent.highlightedHtml || cachedContent.fullContent;
+                return (
+                  <div 
+                    className="prose prose-sm max-w-none dark:prose-invert prose-headings:text-sm prose-p:text-sm prose-li:text-sm prose-strong:text-foreground"
+                    dangerouslySetInnerHTML={{ __html: htmlToRender }}
+                  />
+                );
+              })()}
             </div>
           ) : (
             <div className="text-center text-muted-foreground">
@@ -280,28 +262,27 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
         <div className={`flex items-center justify-center border-t bg-muted/20 ${
           citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'p-2' : 'p-3'
         }`}>
-          {citation.blob_url ? (
-            <a 
-              href={citation.blob_url} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-xs text-muted-foreground hover:text-foreground underline"
-            >
-              {citation.source_file}
-            </a>
-          ) : (
-            <span className="text-xs text-muted-foreground">{citation.source_file}</span>
-          )}
-          {citation.page_number && (
-            <span className="text-xs text-muted-foreground ml-2">
-              • {citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) 
-                ? '' 
-                : citation.source_file.match(/\.(txt|md)$/i) 
-                  ? 'Text File' 
-                  : `Page ${citation.page_number}`
-              }
-            </span>
-          )}
+          <span className="text-xs text-muted-foreground">
+            {citation.source_file.match(/\.(txt|md)$/i) ? 'From: ' 
+              : citation.source_file.match(/\.pdf$/i) && citation.page_number 
+              ? `From Page ${citation.page_number}: ` 
+              : ''}
+            {citation.blob_url ? (
+              <a 
+                href={citation.source_file.match(/\.pdf$/i) && citation.page_number 
+                  ? `${citation.blob_url}#page=${citation.page_number}` 
+                  : citation.blob_url
+                } 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="hover:text-foreground underline"
+              >
+                {citation.source_file}
+              </a>
+            ) : (
+              citation.source_file
+            )}
+          </span>
         </div>
       </div>,
       document.body

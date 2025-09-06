@@ -55,8 +55,15 @@ export default function ChatLayout() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isToggleExpandRef = useRef(false);
 
   useEffect(() => {
+    // Skip scrolling if this is just a toggle expand action
+    if (isToggleExpandRef.current) {
+      isToggleExpandRef.current = false;
+      return;
+    }
+    
     // Scroll to latest user message when it's added
     const latestUserMessage = messages.find(msg => msg.isLatestUserMessage);
     if (latestUserMessage) {
@@ -350,7 +357,7 @@ export default function ChatLayout() {
                 ));
                 setIsWaitingResponse(false);
               }
-            } catch (e) {
+            } catch {
               console.warn('Skipping malformed JSON:', jsonStr.substring(0, 50));
             }
           }
@@ -417,6 +424,7 @@ export default function ChatLayout() {
             <Message 
               message={message} 
               onToggleExpanded={(messageId) => {
+                isToggleExpandRef.current = true;
                 setMessages(prev => prev.map(msg => 
                   msg.id === messageId ? { ...msg, isExpanded: !msg.isExpanded } : msg
                 ));
