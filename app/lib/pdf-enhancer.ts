@@ -39,10 +39,10 @@ Return JSON with:
 Extract actual data values from tables and charts when visible.`;
 
   try {
-    if (!model.generateContent) {
+    if (!('generateContent' in model)) {
           throw new Error('Vision model does not support generateContent');
         }
-    const result = await model.generateContent([prompt]);
+    const result = await (model as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([prompt]);
     const parsed = JSON.parse(result?.response?.text() || '{}');
     return {
       pageNumber,

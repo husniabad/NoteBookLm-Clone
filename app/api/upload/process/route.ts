@@ -19,7 +19,11 @@ export async function POST(req: NextRequest) {
     if (fileType === 'application/pdf') {
       const pages = await convertPDFToImages(fileBuffer);
       
-      const imagePromises = pages.map(async (page) => {
+      const descriptions: string[] = [];
+      
+      // Process pages sequentially with retry logic to avoid ECONNRESET
+      for (let i = 0; i < pages.length; i++) {
+        const page = pages[i];
         const imagePart: Part = { inlineData: { data: page.buffer.toString("base64"), mimeType: 'image/png' } };
         
         const prompt = `Analyze page ${page.pageNumber} using EXACTLY this format:
@@ -38,14 +42,39 @@ Describe this page comprehensively in natural, flowing paragraphs. Cover the con
 
 IMPORTANT: Use the exact === markers shown above. Extract actual data values from tables and charts when visible.`;
         
-        if (!visionModel.generateContent) {
-          throw new Error('Vision model does not support generateContent');
+        // Add delay between requests to avoid rate limiting
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
         }
-        const descriptionResult = await visionModel.generateContent([prompt, imagePart]);
-        return descriptionResult!.response.text();
-      });
-      
-      const descriptions = (await Promise.all(imagePromises)).filter(Boolean) as string[];
+        
+        // Retry logic for network errors
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            if (!('generateContent' in visionModel)) {
+              throw new Error('Vision model does not support generateContent');
+            }
+            const descriptionResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([prompt, imagePart]);
+            const description = descriptionResult?.response?.text?.();
+            if (description) {
+              descriptions.push(description);
+            }
+            break; // Success, exit retry loop
+          } catch (error: unknown) {
+            retries--;
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Error processing page ${page.pageNumber}, retries left: ${retries}`, errorMessage);
+            
+            if (retries === 0) {
+              console.error(`Failed to process page ${page.pageNumber} after all retries`);
+              // Continue with other pages instead of failing completely
+            } else {
+              // Wait before retry
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+          }
+        }
+      }
 
       if (descriptions.length > 0) {
         const allChunks: Array<{content: string, pageNumber: number, contentType: string, metadata?: Record<string, unknown>}> = [];
@@ -161,11 +190,11 @@ IMPORTANT: Use the exact === markers shown above. Extract actual data values fro
         : fileBuffer;
 
       const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/jpeg' } };
-      if (!visionModel.generateContent) {
+      if (!('generateContent' in visionModel)) {
         throw new Error('Vision model does not support generateContent');
       }
-      const descriptionResult = await visionModel.generateContent(["Analyze this image comprehensively. Extract ALL text exactly as written. Describe visual elements: people (appearance, clothing, actions), objects (colors, materials, brands), setting (location, lighting, atmosphere), and any charts/data if present. Be specific and thorough.", imagePart]);
-      const richDescription = descriptionResult!.response.text();
+      const descriptionResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent(["Analyze this image comprehensively. Extract ALL text exactly as written. Describe visual elements: people (appearance, clothing, actions), objects (colors, materials, brands), setting (location, lighting, atmosphere), and any charts/data if present. Be specific and thorough.", imagePart]);
+      const richDescription = descriptionResult?.response?.text?.() || '';
 
       if (!embeddingModel.embedContent) {
         throw new Error('Embedding model does not support embedContent');

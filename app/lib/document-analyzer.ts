@@ -32,10 +32,10 @@ Return JSON with:
 }`;
 
   try {
-    if (!model.generateContent) {
+    if (!('generateContent' in model)) {
           throw new Error('Vision model does not support generateContent');
         }
-    const result = await model.generateContent([prompt]);
+    const result = await (model as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([prompt]);
     return JSON.parse(result?.response?.text() || '{"type": "general", "headers": [], "entities": [], "topics": []}');
   } catch {
     return { type: 'general', headers: [], entities: [], topics: [] };

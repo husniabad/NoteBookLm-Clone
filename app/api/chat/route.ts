@@ -109,10 +109,10 @@ Respond with JSON containing:
 - isAnalysisQuery: boolean (true if analyzing multiple documents or comparing content)`;
 
         let analysis;
-        if (!visionModel.generateContent) {
+        if (!('generateContent' in visionModel)) {
           analysis = { isComplex: false };
         } else {
-          const analysisResult = await visionModel.generateContent([analysisPrompt]);
+          const analysisResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([analysisPrompt]);
           try {
             analysis = analysisResult?.response?.text ? JSON.parse(analysisResult.response.text()) : { isComplex: false };
           } catch {
@@ -341,10 +341,10 @@ Analyze if the current description provides enough detail to answer the user's q
 
 Respond with JSON: {"adequate": boolean, "missingAspects": ["aspect1", "aspect2"], "confidence": 0-100}`;
 
-          if (!visionModel.generateContent) {
+          if (!('generateContent' in visionModel)) {
             throw new Error('Vision model does not support generateContent');
           }
-          const adequacyResult = await visionModel.generateContent([adequacyPrompt]);
+          const adequacyResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([adequacyPrompt]);
           let adequacyAnalysis;
           try {
             adequacyAnalysis = JSON.parse(adequacyResult?.response?.text() || '{"adequate": true}');
@@ -369,7 +369,7 @@ Provide detailed description of these specific aspects that were not covered in 
               const imageBuffer = await imageResponse.arrayBuffer();
               const imagePart: Part = { inlineData: { data: Buffer.from(imageBuffer).toString('base64'), mimeType: 'image/jpeg' } };
               
-              const reanalysisResult = await visionModel.generateContent([focusedPrompt, imagePart]);
+              const reanalysisResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([focusedPrompt, imagePart]);
               const additionalDetails = reanalysisResult?.response?.text() || '';
               
               if (additionalDetails) {
@@ -441,10 +441,10 @@ IMPORTANT: Use information from ALL ${uniqueFiles.length} available files (${uni
           { text: contextText }
         ];
 
-        if (!visionModel.generateContent) {
+        if (!('generateContent' in visionModel)) {
           throw new Error('Vision model does not support generateContent');
         }
-        const finalResult = await visionModel.generateContent(promptParts);
+        const finalResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent(promptParts);
         const finalAnswer = finalResult?.response?.text ? finalResult.response.text() : 'Sorry, I could not generate a response.';
         
         // Create citations with exact document content
@@ -621,9 +621,9 @@ IMPORTANT: Use information from ALL ${uniqueFiles.length} available files (${uni
               
               try {
                 const textModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-                if (!textModel.generateContent) throw new Error('Text model generateContent not available');
+                if (!('generateContent' in textModel)) throw new Error('Text model generateContent not available');
                 
-                const aiResult = await textModel.generateContent([aiPrompt]);
+                const aiResult = await (textModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([aiPrompt]);
                 const aiResponse = aiResult?.response?.text() || '';
                 const aiPhrases = aiResponse.split('|').map((p: string) => p.trim()).filter((p: string) => p.length > 0);
                 
