@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     const contentLength = req.headers.get('content-length');
     console.log('Content-Length:', contentLength);
     
-    if (contentLength && parseInt(contentLength) > 50 * 1024 * 1024) {
+    if (contentLength && parseInt(contentLength) > 100 * 1024 * 1024) {
       console.log('File too large:', contentLength);
       return NextResponse.json({ error: 'File too large (max 50MB)' }, { status: 413 });
     }
