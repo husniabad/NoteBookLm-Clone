@@ -1,17 +1,30 @@
 import genAI from '@/app/lib/ai-provider';
 import { Chunk, BlueprintDocument } from './document-search';
 
+interface PageBlueprint {
+  page_number: number;
+  page_dimensions: { width: number; height: number };
+  content_blocks: unknown[];
+  combined_markdown: string;
+}
+
+interface AnalysisResult {
+  type: 'FULL_HIGHLIGHT' | 'PHRASE_HIGHLIGHT';
+  reason: string;
+}
+
   export interface Citation {
     source_file: string;
     page_number?: number;
     content_snippet: string;
     blob_url?: string;
-    chunk_id?: number;
+    chunk_id?: string;
     specific_content?: string;
     citation_id?: string;
     citation_index?: number;
     highlight_phrases?: string[];
     highlighted_html?: string;
+    page_blueprint?: PageBlueprint;
   }
 
   export class CitationService {
@@ -101,7 +114,7 @@ import { Chunk, BlueprintDocument } from './document-search';
       }
     }
 
-    static applyHighlighting(content: string, phrases: string[], analysisResult: any): string {
+    static applyHighlighting(content: string, phrases: string[], analysisResult: AnalysisResult): string {
       const isFullHighlight = analysisResult.type === 'FULL_HIGHLIGHT' || 
                             (phrases.length === 1 && phrases[0].trim().length > content.trim().length * 0.8);
       
@@ -203,7 +216,7 @@ import { Chunk, BlueprintDocument } from './document-search';
           if (score > bestScore) {
             bestScore = score;
             bestSourceDoc = {
-              id: parseInt(chunk.document_id),
+              id: chunk.document_id,
               content: chunk.content,
               source_file: sourceFile,
               page_number: chunk.page_number,
@@ -213,7 +226,7 @@ import { Chunk, BlueprintDocument } from './document-search';
         }
                 
         const sourceDoc = bestSourceDoc || (sourceChunks[0] ? {
-          id: parseInt(sourceChunks[0].document_id),
+          id: sourceChunks[0].document_id,
           content: sourceChunks[0].content,
           source_file: sourceFile,
           page_number: sourceChunks[0].page_number,
@@ -221,16 +234,17 @@ import { Chunk, BlueprintDocument } from './document-search';
         } : null);
         
         if (sourceDoc) {
-          const blueprint = blueprints.find(bp => bp.id === sourceDoc.id.toString());
-          const blobUrl = blueprint?.blueprint?.blob_url || 'placeholder';
-          const analysisResult = this.analyzeTextStructure(sourceDoc.content || '');
-          let highlightPhrases: string[];
+          const blueprint = blueprints.find(bp => bp.id === sourceDoc.id);
+          const blobUrl = blueprint?.pdf_url || 
+            (blueprint?.blueprint && !Array.isArray(blueprint.blueprint) ? blueprint.blueprint.blob_url : undefined) || 
+            'placeholder';
           
-          if (analysisResult.type === 'FULL_HIGHLIGHT') {
-            highlightPhrases = [(sourceDoc.content || '').trim()];
-          } else {
-            highlightPhrases = await this.extractContextualPhrases(sourceDoc.content || '', contextSnippet);
-          }
+          // Find the specific page blueprint
+          const pageBlueprint = blueprint?.blueprint && Array.isArray(blueprint.blueprint) 
+            ? blueprint.blueprint.find((page: PageBlueprint) => 
+                page.page_number === (sourceDoc.page_number || pageNumber)
+              )
+            : null;
           
           citations.push({
             source_file: sourceFile,
@@ -239,10 +253,11 @@ import { Chunk, BlueprintDocument } from './document-search';
             blob_url: blobUrl,
             chunk_id: sourceDoc.id,
             specific_content: sourceDoc.content,
-            highlight_phrases: highlightPhrases,
-            highlighted_html: this.applyHighlighting(sourceDoc.content || '', highlightPhrases, analysisResult),
+            highlight_phrases: [],
+            highlighted_html: sourceDoc.content || '',
             citation_id: `${sourceDoc.id}-${Date.now()}-${Math.random()}`,
-            citation_index: citations.length
+            citation_index: citations.length,
+            page_blueprint: pageBlueprint || undefined
           });
         }
       }

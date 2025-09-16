@@ -2,8 +2,35 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2 } from 'lucide-react';
+import { X, Loader2, Maximize2 } from 'lucide-react';
+import CitationBlueprint from './CitationBlueprint';
 
+
+interface ContentBlock {
+  type: string;
+  bounding_box: [number, number, number, number];
+  spans?: {
+    text: string;
+    font: string;
+    size: number;
+    color: string;
+    is_bold: boolean;
+    is_italic: boolean;
+    is_line_end: boolean;
+  }[];
+  html_content?: string;
+  content?: string;
+  url?: string;
+  description?: string;
+  source_image_url?: string;
+}
+
+interface PageBlueprint {
+  page_number: number;
+  page_dimensions: { width: number; height: number };
+  content_blocks: ContentBlock[];
+  combined_markdown: string;
+}
 
 interface Citation {
   source_file: string;
@@ -18,6 +45,7 @@ interface Citation {
   citation_index?: number;
   highlight_phrases?: string[];
   highlighted_html?: string;
+  page_blueprint?: PageBlueprint;
 }
 
 interface CitationPopoverProps {
@@ -47,6 +75,8 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [popupWidth, setPopupWidth] = useState(320);
   const [popupHeight, setPopupHeight] = useState(200);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showContent, setShowContent] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   
 
@@ -76,16 +106,28 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
         const messageContainer = triggerRef.current.closest('[class*="p-3"][class*="rounded-lg"]');
         const bubbleRect = messageContainer?.getBoundingClientRect();
         
-        // Use actual bubble width
-        const bubbleWidth = bubbleRect ? bubbleRect.width : 320;
-        setPopupWidth(bubbleWidth * 0.9);
-        
-        const bubbleHeight = bubbleRect ? bubbleRect.height : 200;
-        
+        const isPdf = citation.source_file.match(/\.pdf$/i);
         const isImage = citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i);
-        const maxPopupHeight = Math.min(bubbleHeight, window.innerHeight * 0.6);
-        const calculatedHeight = isImage ? Math.max(150, maxPopupHeight) : maxPopupHeight;
-        setPopupHeight(calculatedHeight);
+        let calculatedHeight;
+        
+        if (isPdf) {
+          // For PDFs: use full chat section height and dynamic width
+          const chatMain = document.querySelector('main');
+          calculatedHeight = chatMain ? chatMain.clientHeight - 20 : window.innerHeight - 40;
+          setPopupHeight(calculatedHeight);
+          
+          const calculatedWidth = window.innerWidth * 0.8;
+          setPopupWidth(calculatedWidth);
+        } else {
+          // For other files: use bubble constraints
+          const bubbleWidth = bubbleRect ? bubbleRect.width : 320;
+          setPopupWidth(bubbleWidth * 0.9);
+          
+          const bubbleHeight = bubbleRect ? bubbleRect.height : 200;
+          const maxPopupHeight = Math.min(bubbleHeight, window.innerHeight * 0.6);
+          calculatedHeight = isImage ? Math.max(150, maxPopupHeight) : maxPopupHeight;
+          setPopupHeight(calculatedHeight);
+        }
         const margin = 12;
         const offset = 8;
         
@@ -93,9 +135,12 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
         const mouseX = mousePos.x || e.clientX;
         const mouseY = mousePos.y || e.clientY;
         
-        // Horizontal positioning - constrain within bubble bounds
+        // Horizontal positioning
         let x;
-        if (isImage) {
+        if (isPdf) {
+          // For PDFs: center on screen
+          x = (window.innerWidth - popupWidth) / 2;
+        } else if (isImage) {
           // For images: position within bubble bounds
           const bubbleLeft = bubbleRect ? bubbleRect.left : margin;
           const bubbleRight = bubbleRect ? bubbleRect.right : window.innerWidth - margin;
@@ -105,23 +150,30 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
           const bubbleLeft = bubbleRect ? bubbleRect.left : margin;
           const bubbleRight = bubbleRect ? bubbleRect.right : window.innerWidth - margin;
           const bubbleCenter = (bubbleLeft + bubbleRight) / 2;
-          const popupWidthForCalc = bubbleWidth * 0.9;
+          const popupWidthForCalc = popupWidth;
           
           x = bubbleCenter - popupWidthForCalc / 2;
         }
         
-        // Vertical positioning - force within bubble bounds
-        const bubbleTop = bubbleRect ? bubbleRect.top : margin;
-        const bubbleBottom = bubbleRect ? bubbleRect.bottom : window.innerHeight - margin;
-        
-        let y = mouseY + offset; // Start below cursor
-        
-        // Force within bubble bounds
-        if (y + calculatedHeight > bubbleBottom) {
-          y = bubbleBottom - calculatedHeight;
-        }
-        if (y < bubbleTop) {
-          y = bubbleTop;
+        // Vertical positioning
+        let y;
+        if (isPdf) {
+          // For PDFs: align to chat section top
+          y = 20;
+        } else {
+          // For other files: force within bubble bounds
+          const bubbleTop = bubbleRect ? bubbleRect.top : margin;
+          const bubbleBottom = bubbleRect ? bubbleRect.bottom : window.innerHeight - margin;
+          
+          y = mouseY + offset; // Start below cursor
+          
+          // Force within bubble bounds
+          if (y + calculatedHeight > bubbleBottom) {
+            y = bubbleBottom - calculatedHeight;
+          }
+          if (y < bubbleTop) {
+            y = bubbleTop;
+          }
         }
         
         setPosition({ x, y });
@@ -172,12 +224,32 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
     }, 300);
   };
 
+  const handleCloseFullscreen = useCallback(() => {
+    setShowContent(false);
+    setTimeout(() => {
+      setIsFullscreen(false);
+    }, 300);
+  }, []);
 
   useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (isFullscreen) {
+      const timer = setTimeout(() => setShowContent(true), 10);
+      return () => clearTimeout(timer);
+    }
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        handleCloseFullscreen();
+      }
     };
-  }, []);
+    
+    if (isFullscreen) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [isFullscreen, handleCloseFullscreen]);
 
   useEffect(() => {
     return () => {
@@ -191,13 +263,13 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
     return createPortal(
       <div
         ref={popupRef}
-        className="fixed z-50 bg-card text-card-foreground border rounded-lg shadow-xl max-h-[80vh] flex flex-col"
+        className="fixed z-50 bg-card text-card-foreground border rounded-lg shadow-xl flex flex-col"
         style={{
           left: position.x,
           top: position.y,
-          width: citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'auto' : `${popupWidth}px`,
+          width: citation.source_file.match(/\.pdf$/i) ? 'auto' : (citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'auto' : `${popupWidth}px`),
           minWidth: citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? '0' : 'auto',
-          height: citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? `${popupHeight}px` : 'auto',
+          height: citation.source_file.match(/\.pdf$/i) ? `${popupHeight}px` : (citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? `${popupHeight}px` : 'auto'),
           maxWidth: citation.source_file.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'none' : `${popupWidth}px`
         }}
         onMouseEnter={() => {
@@ -205,7 +277,15 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
         }}
         onMouseLeave={handleMouseLeave}
       >
-        <div className="flex justify-end p-2">
+        <div className="flex justify-between p-2">
+          {citation.page_blueprint && (
+            <button 
+              onClick={() => setIsFullscreen(true)}
+              className="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1"
+            >
+              <Maximize2 className="h-3 w-3" />
+            </button>
+          )}
           <button 
             onClick={() => setIsOpen(false)}
             className="text-muted-foreground hover:text-foreground"
@@ -238,6 +318,15 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
                 </>
               ) : (
                 <span className="text-muted-foreground">Image preview not available</span>
+              )}
+            </div>
+          ) : citation.page_blueprint ? (
+            <div className="overflow-hidden" style={{ maxHeight: citation.source_file.match(/\.pdf$/i) ? 'none' : `${popupHeight - 100}px` }}>
+              {citation.page_blueprint && (
+                <CitationBlueprint 
+                  pageData={citation.page_blueprint} 
+                  className="mx-auto"
+                />
               )}
             </div>
           ) : cachedContent ? (
@@ -289,6 +378,38 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
     );
   };
 
+  const renderFullscreen = () => {
+    if (!isFullscreen) return null;
+    
+    return createPortal(
+      <div 
+        className={`fixed inset-0 z-[100] bg-black flex items-center justify-center transition-opacity duration-300 ${showContent ? 'bg-opacity-75' : 'bg-opacity-0'}`}
+        onClick={handleCloseFullscreen}
+        onKeyDown={(e) => e.key === 'Escape' && handleCloseFullscreen()}
+        tabIndex={-1}
+      >
+        <div 
+          className={`relative transition-all duration-300 ${showContent ? 'scale-100 opacity-100' : 'scale-95 opacity-0'}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button 
+            onClick={handleCloseFullscreen}
+            className="absolute top-2 right-2 z-10 text-white hover:text-gray-300 bg-black bg-opacity-50 rounded-full p-1"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          {citation.page_blueprint && (
+            <CitationBlueprint 
+              pageData={citation.page_blueprint} 
+              className="h-full"
+            />
+          )}
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
   return (
     <>
       <span
@@ -301,6 +422,7 @@ export default function CitationPopover({ citation, children }: CitationPopoverP
         {children}
       </span>
       {renderPopup()}
+      {renderFullscreen()}
     </>
   );
 }

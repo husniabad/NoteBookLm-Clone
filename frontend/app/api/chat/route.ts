@@ -21,9 +21,8 @@ export async function POST(req: NextRequest) {
         streamHandler.sendThinkingStep('Analyzing query and context...');
 
         // Analyze query
-        const analysis = await QueryAnalyzer.analyzeQuery(message, sessionId || '', visionModel);
+        const analysis = await QueryAnalyzer.analyzeQuery(message, sessionId || '', visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> });
         const intent = QueryAnalyzer.detectIntent(message);
-        const smartKeywords = QueryAnalyzer.extractSmartKeywords(message);
         const specificFileName = QueryAnalyzer.getSpecificFileName(message);
 
         const searchSteps: string[] = [];

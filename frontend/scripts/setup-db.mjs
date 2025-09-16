@@ -11,6 +11,12 @@ async function setupDatabase() {
   try {
     await client.sql`BEGIN`;
 
+    // 0. Drop existing tables if they exist
+    await client.sql`DROP TABLE IF EXISTS chat_messages CASCADE;`;
+    await client.sql`DROP TABLE IF EXISTS chunks CASCADE;`;
+    await client.sql`DROP TABLE IF EXISTS documents CASCADE;`;
+    console.log("✓ Existing tables dropped.");
+
     // 1. Enable vector extension
     await client.sql`CREATE EXTENSION IF NOT EXISTS vector;`;
     console.log("✓ Vector extension enabled.");
@@ -22,7 +28,8 @@ async function setupDatabase() {
           session_id VARCHAR(255), 
           source_file VARCHAR(255) NOT NULL,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-          blueprint JSONB NOT NULL
+          blueprint JSONB NOT NULL,
+          pdf_url TEXT
       );
     `;
     console.log("✓ 'documents' table created.");

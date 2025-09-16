@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+
 
 export async function POST(req: NextRequest) {
   try {
@@ -25,23 +25,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No files or session ID provided' }, { status: 400 });
     }
 
-    // Process files immediately with blob upload
+    // Process files without blob upload (backend will handle upload)
     const processPromises = files.map(async (file) => {
       const fileBuffer = Buffer.from(await file.arrayBuffer());
       
-      // Upload to blob and get URL
-      let blobUrl = null;
-      try {
-        const blob = await put(file.name, file, {
-          access: 'public',
-          addRandomSuffix: true,
-        });
-        blobUrl = blob.url;
-      } catch (error) {
-        console.error('Blob upload failed:', error);
-      }
-      
-      // Process with file buffer and blob URL
+      // Process with file buffer only - backend will handle blob upload
       try {
         const processResponse = await fetch(new URL('/api/upload/process', req.url), {
           method: 'POST',
@@ -51,7 +39,6 @@ export async function POST(req: NextRequest) {
             fileType: file.type,
             originalFileName: file.name,
             sessionId: sessionId,
-            blobUrl: blobUrl,
           }),
         });
         

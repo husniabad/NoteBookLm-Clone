@@ -1,6 +1,6 @@
 import { sql } from '@/app/lib/vercel-postgres';
-import { getCachedEmbedding } from '@/app/lib/query-cache';
-import { QueryAnalysis, SmartKeywords } from './query-analyzer';
+// import { getCachedEmbedding } from '@/app/lib/query-cache';
+// import { QueryAnalysis, SmartKeywords } from './query-analyzer';
 
 export interface Chunk {
   content: string;
@@ -8,17 +8,29 @@ export interface Chunk {
   document_id: string;
 }
 
+interface PageBlueprint {
+  page_number: number;
+  page_dimensions: { width: number; height: number };
+  content_blocks: unknown[];
+  combined_markdown: string;
+}
+
+interface EmbeddingModel {
+  embedContent(content: string): Promise<{ embedding: { values: number[] } }>;
+}
+
 export interface BlueprintDocument {
   id: string;
   source_file: string;
-  blueprint: any;
+  blueprint: PageBlueprint[] | { type: string; blob_url: string };
+  pdf_url?: string;
 }
 
 export class DocumentSearchService {
   static async searchDocuments(
     sessionId: string,
     message: string,
-    embeddingModel: any
+    embeddingModel: EmbeddingModel
   ): Promise<{ retrievedChunks: Chunk[], blueprints: BlueprintDocument[] }> {
     
     // 1. Find relevant chunks via vector search
@@ -39,12 +51,21 @@ export class DocumentSearchService {
 
     // 2. Get the full blueprints for the parent documents
     const documentIds = [...new Set(retrievedChunks.map(chunk => chunk.document_id))];
-    const blueprintResults = await sql<BlueprintDocument>`
-      SELECT id, source_file, blueprint
-      FROM documents
-      WHERE id = ANY(${documentIds})
-    `;
-    const blueprints = blueprintResults.rows;
+    
+    if (documentIds.length === 0) {
+      return { retrievedChunks, blueprints: [] };
+    }
+    
+    const blueprintPromises = documentIds.map(docId => 
+      sql<BlueprintDocument>`
+        SELECT id, source_file, blueprint, pdf_url
+        FROM documents
+        WHERE id = ${docId}
+      `
+    );
+    
+    const blueprintResults = await Promise.all(blueprintPromises);
+    const blueprints = blueprintResults.flatMap(result => result.rows);
     
     return { retrievedChunks, blueprints };
   }

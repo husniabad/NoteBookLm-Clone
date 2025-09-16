@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, FormEvent, useEffect, ChangeEvent, DragEvent, KeyboardEvent } from 'react';
+import { useState, useRef, FormEvent, useEffect, ChangeEvent, DragEvent, KeyboardEvent, ClipboardEvent } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import TextareaAutosize from './ui/textarea-autosize';
@@ -288,7 +288,7 @@ export default function ChatLayout() {
       content: '',
       searchSteps: [],
       isThinking: true,
-      currentStep: 'Starting...',
+      currentStep: 'Starting...', 
       isExpanded: false
     };
     setMessages(prev => [...prev, thinkingMessage]);
@@ -395,6 +395,26 @@ export default function ChatLayout() {
     }
     e.dataTransfer.clearData();
   };
+
+  const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData.items;
+    const tempFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file && ALLOWED_FILE_TYPES.includes(file.type)) {
+          tempFiles.push(file);
+        }
+      }
+    }
+
+    if (tempFiles.length > 0) {
+      e.preventDefault();
+      setFiles(prevFiles => [...prevFiles, ...tempFiles]);
+      setRejectionMessage('');
+    }
+  };
   
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -412,7 +432,7 @@ export default function ChatLayout() {
       onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false); }}
       onDrop={handleDrop}>
       <header className='flex justify-between items-center p-4 border-b bg-background'>
-        <h1 className='text-2xl font-bold'>DocuChat</h1>
+        <h1 className='text-2xl font-bold'>DocuVisionLM</h1>
         <div className="flex items-center gap-4">
           <Button variant='outline' onClick={handleNewChat}>New Chat</Button>
           <ThemeToggle />
@@ -473,6 +493,7 @@ export default function ChatLayout() {
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   placeholder='Type a message or drop PDFs, images, text files...'
                   minRows={1}
                   maxRows={5} 

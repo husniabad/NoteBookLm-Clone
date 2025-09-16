@@ -3,15 +3,24 @@ import { sql } from "@/app/lib/vercel-postgres";
 import genAI from "@/app/lib/ai-provider";
 import sharp from 'sharp';
 import { Part } from "@google/generative-ai";
-import { convertPDFToImages } from "@/app/lib/pdf-converter";
-import { analyzeDocumentStructure, createSemanticChunks } from "@/app/lib/document-analyzer";
-import { correlateTextWithVisuals, assembleMultiPageContent } from "@/app/lib/pdf-enhancer";
+import { createSemanticChunks } from "@/app/lib/document-analyzer";
+import { uploadToS3 } from "@/app/lib/s3-client";
+
+interface PageData {
+  combined_markdown: string;
+  page_number: number;
+}
+
+interface ChunkData {
+  content: string;
+  pageNumber: number;
+}
 
 const PYTHON_BACKEND_URL = "http://127.0.0.1:8000/process-pdf/";
 
 export async function POST(req: NextRequest) {
   try {
-    const { fileBuffer: bufferArray, fileType, originalFileName, sessionId, blobUrl } = await req.json();
+    const { fileBuffer: bufferArray, fileType, originalFileName, sessionId } = await req.json();
     
     const fileBuffer = Buffer.from(bufferArray);
     const file = new File([fileBuffer], originalFileName, { type: fileType });
@@ -21,7 +30,6 @@ export async function POST(req: NextRequest) {
     const visionModel = genAI.getGenerativeModel({ model: 'gemini-1.5-pro-latest' });
 
 if (fileType === 'application/pdf') {
-        // --- NEW PDF HANDLING LOGIC ---
 
         // 1. Forward the PDF to the Python backend
         const backendFormData = new FormData();
@@ -38,26 +46,27 @@ if (fileType === 'application/pdf') {
 
         const processedData = await pythonResponse.json();
         const blueprint = processedData.data;
+        const pdfUrl = processedData.pdf_url;
 
-        // 2. Store the entire blueprint in PostgreSQL
+        // 2. Store the entire blueprint in PostgreSQL with PDF URL
         const documentResult = await sql`
-            INSERT INTO documents (source_file, session_id, blueprint)
-            VALUES (${originalFileName}, ${sessionId}, ${JSON.stringify(blueprint)})
+            INSERT INTO documents (source_file, session_id, blueprint, pdf_url)
+            VALUES (${originalFileName}, ${sessionId}, ${JSON.stringify(blueprint)}, ${pdfUrl})
             RETURNING id;
         `;
         const documentId = documentResult.rows[0].id;
         
         // 3. Chunk and embed the combined_markdown for the vector database
-        const allChunks = blueprint.flatMap((page: any) => ({
+        const allChunks: ChunkData[] = blueprint.flatMap((page: PageData) => ({
             content: page.combined_markdown,
             pageNumber: page.page_number,
         }));
 
         const embeddings = await Promise.all(
-            allChunks.map((chunk: any) => embeddingModel.embedContent!(chunk.content))
+            allChunks.map((chunk: ChunkData) => embeddingModel.embedContent!(chunk.content))
         );
 
-        const insertPromises = allChunks.map((chunk:any, i:number) => 
+        const insertPromises = allChunks.map((chunk: ChunkData, i: number) => 
           sql`
             INSERT INTO chunks (document_id, content, embedding, page_number)
             VALUES (${documentId}, ${chunk.content}, ${JSON.stringify(embeddings[i].embedding.values)}, ${chunk.pageNumber})
@@ -71,17 +80,20 @@ if (fileType === 'application/pdf') {
         ? await sharp(fileBuffer).resize({ width: 1200, height: 1200, fit: 'inside' }).jpeg({ quality: 90 }).toBuffer()
         : fileBuffer;
 
+      // Upload to S3
+      const s3Url = await uploadToS3(resizedBuffer, originalFileName, 'image/jpeg');
+
       const imagePart: Part = { inlineData: { data: resizedBuffer.toString("base64"), mimeType: 'image/jpeg' } };
       if (!('generateContent' in visionModel)) {
         throw new Error('Vision model does not support generateContent');
       }
-      const descriptionResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent(["Analyze this image comprehensively. Extract ALL text exactly as written. Describe visual elements: people (appearance, clothing, actions), objects (colors, materials, brands), setting (location, lighting, atmosphere), and any charts/data if present. Be specific and thorough.", imagePart]);
+      const descriptionResult = await visionModel.generateContent(["Analyze this image comprehensively. Extract ALL text exactly as written. Describe visual elements: people (appearance, clothing, actions), objects (colors, materials, brands), setting (location, lighting, atmosphere), and any charts/data if present. Be specific and thorough.", imagePart]);
       const richDescription = descriptionResult?.response?.text?.() || '';
 
       // 1. Create a simple master record in 'documents'
       const documentResult = await sql`
         INSERT INTO documents (source_file, session_id, blueprint)
-        VALUES (${originalFileName}, ${sessionId}, ${JSON.stringify({ type: 'image', blob_url: blobUrl })})
+        VALUES (${originalFileName}, ${sessionId}, ${JSON.stringify({ type: 'image', blob_url: s3Url })})
         RETURNING id;
       `;
       const documentId = documentResult.rows[0].id;
@@ -99,10 +111,13 @@ if (fileType === 'application/pdf') {
     else if (fileType.startsWith('text/')) {
         const textContent = fileBuffer.toString('utf-8');
 
+        // Upload to S3
+        const s3Url = await uploadToS3(fileBuffer, originalFileName, fileType);
+
         // 1. Create a simple master record in 'documents'
         const documentResult = await sql`
           INSERT INTO documents (source_file, session_id, blueprint)
-          VALUES (${originalFileName}, ${sessionId}, ${JSON.stringify({ type: 'text', blob_url: blobUrl })})
+          VALUES (${originalFileName}, ${sessionId}, ${JSON.stringify({ type: 'text', blob_url: s3Url })})
           RETURNING id;
         `;
         const documentId = documentResult.rows[0].id;

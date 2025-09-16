@@ -1,5 +1,9 @@
 import { sql } from '@/app/lib/vercel-postgres';
 
+interface VisionModel {
+  generateContent(parts: unknown[]): Promise<{ response?: { text(): string } }>;
+}
+
 export interface QueryAnalysis {
   isComplex: boolean;
   subQueries?: string[];
@@ -75,7 +79,7 @@ export class QueryAnalyzer {
   static async analyzeQuery(
     message: string, 
     sessionId: string, 
-    visionModel: any
+    visionModel: VisionModel
   ): Promise<QueryAnalysis> {
     const { hasRecentFiles, recentFileTypes, recentConversation } = await this.getConversationContext(sessionId);
     const isStandaloneQuery = /this file|this image|latest|attached/i.test(message);
@@ -103,7 +107,7 @@ Respond with JSON containing:
     if (!('generateContent' in visionModel)) {
       analysis = { isComplex: false };
     } else {
-      const analysisResult = await (visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> }).generateContent([analysisPrompt]);
+      const analysisResult = await visionModel.generateContent([analysisPrompt]);
       try {
         analysis = analysisResult?.response?.text ? JSON.parse(analysisResult.response.text()) : { isComplex: false };
       } catch {

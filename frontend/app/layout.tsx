@@ -6,7 +6,7 @@ import { ThemeProvider } from "@/app/components/theme-provider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "DocuChat",
+  title: "DocuVisionLM",
   description: "A RAG chat application built with Next.js",
 };
 
