@@ -2,6 +2,18 @@ from pydantic import BaseModel
 from typing import List, Tuple, Union
 from bs4 import BeautifulSoup
 
+class Cell(BaseModel):
+    text: str
+    is_header: bool = False
+    rowspan: int = 1
+    colspan: int = 1
+
+class TableBlock(BaseModel):
+    type: str = "table"
+    bounding_box: Tuple[float, float, float, float]
+    rows: List[List[Cell]]
+    avg_font_size: float = 8.0
+    
 class Span(BaseModel):
     text: str
     font: str
@@ -54,10 +66,10 @@ class VectorBlock(BaseModel):
 class PageData(BaseModel):
     page_number: int
     page_dimensions: PageDimensions
-    content_blocks: List[Union[TextBlock, ImageBlock, HeaderFooterTextBlock, OcrTextBlock, VectorBlock]]
+    content_blocks: List[Union[TextBlock, ImageBlock, HeaderFooterTextBlock, OcrTextBlock, VectorBlock, TableBlock]]
     combined_markdown: str
 
-def generate_combined_markdown(content_blocks: List[Union[TextBlock, ImageBlock]]) -> str:
+def generate_combined_markdown(content_blocks: List[Union[TextBlock, ImageBlock, TableBlock]]) -> str:
     """Generates a clean markdown string from the structured content blocks."""
     markdown_parts = []
     for block in content_blocks:
@@ -75,6 +87,17 @@ def generate_combined_markdown(content_blocks: List[Union[TextBlock, ImageBlock]
         elif block.type == "vector":
             markdown_parts.append(f"Untitled Vector\n\nVisual Description: {block.description}")
     return "\n\n".join(markdown_parts)
+
+def create_table_block(table_data: List[List[str | None]], bbox: Tuple[float, float, float, float], avg_font_size: float) -> TableBlock:
+    """Create a TableBlock from a 2D list of strings."""
+    rows = []
+    for i, row_data in enumerate(table_data):
+        is_header = i == 0
+        # Ensure cell content is a string
+        row_cells = [Cell(text=str(cell) if cell is not None else "", is_header=is_header) for cell in row_data]
+        rows.append(row_cells)
+    
+    return TableBlock(bounding_box=bbox, rows=rows, avg_font_size=avg_font_size)
 
 def create_text_block(block_data: dict) -> TextBlock:
     """Create a TextBlock from extracted data"""

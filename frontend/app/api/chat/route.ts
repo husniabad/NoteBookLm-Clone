@@ -24,6 +24,8 @@ export async function POST(req: NextRequest) {
         const analysis = await QueryAnalyzer.analyzeQuery(message, sessionId || '', visionModel as { generateContent: (parts: unknown[]) => Promise<{ response?: { text(): string } }> });
         const intent = QueryAnalyzer.detectIntent(message);
         const specificFileName = QueryAnalyzer.getSpecificFileName(message);
+        const smartKeywords = QueryAnalyzer.extractSmartKeywords(message);
+        const pageNumbers = QueryAnalyzer.extractPageNumbers(message);
 
         const searchSteps: string[] = [];
 
@@ -55,7 +57,7 @@ export async function POST(req: NextRequest) {
 
         // Search documents
         const { retrievedChunks, blueprints } = await DocumentSearchService.searchDocuments(
-          sessionId || '', message, embeddingModel
+          sessionId || '', message, embeddingModel, analysis, smartKeywords, pageNumbers
         );
 
         if (retrievedChunks.length === 0) {

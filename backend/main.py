@@ -2,6 +2,7 @@ import os
 import fitz  # PyMuPDF
 import aiohttp
 import asyncio
+import tempfile
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
@@ -10,9 +11,9 @@ from dotenv import load_dotenv
 # Import services
 from image_classifier import classify_image, resize_image_for_ai
 from ai_vision_service import get_ai_visual_analysis
-from pdf_processor import get_closest_caption, extract_text_blocks, identify_potential_captions, extract_images_from_page
+from pdf_processor import get_closest_caption, extract_text_blocks, identify_potential_captions, extract_images_from_page, extract_tables_from_page
 from content_builder import (
-     create_text_block, create_image_block,
+     create_text_block, create_image_block, create_table_block,
     create_ocr_text_block, create_header_footer_block, build_page_data
 )
 from aws_s3 import AWSS3
@@ -76,6 +77,10 @@ async def process_pdf(file: UploadFile = File(...)):
     final_data: List[dict] = []
     file_bytes = await file.read()
     pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+        temp_pdf.write(file_bytes)
+        temp_pdf_path = temp_pdf.name
     
     async with aiohttp.ClientSession() as session:
         # Start PDF upload in the background
@@ -88,12 +93,20 @@ async def process_pdf(file: UploadFile = File(...)):
         for page_num in range(len(pdf_document)):
             page = pdf_document.load_page(page_num)
             page_dict = page.get_text("dict")
+
+            # --- MODIFICATION: Extract tables and their areas ---
+            tables_with_coords_and_font = extract_tables_from_page(temp_pdf_path, page_num + 1)
+            table_areas = [bbox for _, bbox, _ in tables_with_coords_and_font]
             
-            text_blocks = extract_text_blocks(page_dict)
-            page_content_blocks[page_num].extend([create_text_block(block_data) for block_data in text_blocks])
+            for table_data, bbox, avg_font_size in tables_with_coords_and_font:
+                page_content_blocks[page_num].append(create_table_block(table_data, bbox, avg_font_size))
 
             potential_captions = identify_potential_captions(page_dict)
             image_data = extract_images_from_page(page, pdf_document)
+            image_areas = [img['bbox'] for img in image_data]
+
+            text_blocks = extract_text_blocks(page_dict, table_areas, image_areas)
+            page_content_blocks[page_num].extend([create_text_block(block_data) for block_data in text_blocks])
             
             for img_info in image_data:
                 visual_id = f"page_{page_num + 1}_img_{img_info['index']}"
@@ -186,5 +199,8 @@ async def process_pdf(file: UploadFile = File(...)):
             final_data.append(final_page_data)
             
         pdf_url = await pdf_upload_task
+
+    # Clean up the temporary file
+    os.unlink(temp_pdf_path)
         
     return {"data": final_data, "pdf_url": pdf_url}

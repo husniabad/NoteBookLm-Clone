@@ -419,7 +419,9 @@ export default function ChatLayout() {
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      formRef.current?.requestSubmit();
+      if (!formIsDisabled) {
+        formRef.current?.requestSubmit();
+      }
     }
   };
 
@@ -498,7 +500,6 @@ export default function ChatLayout() {
                   minRows={1}
                   maxRows={5} 
                   className="flex-1 w-full resize-none bg-transparent border-0 focus:ring-0 focus:outline-none flex items-center"
-                  disabled={formIsDisabled}
                 />
                 <Button type='submit' disabled={formIsDisabled || (!inputValue.trim() && files.length === 0)}>
                   {isUploading || isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}

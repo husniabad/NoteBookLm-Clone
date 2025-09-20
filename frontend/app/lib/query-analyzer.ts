@@ -51,29 +51,43 @@ export class QueryAnalyzer {
   }
 
   static async getConversationContext(sessionId: string) {
-    const recentFileCheck = await sql`
-      SELECT id, source_file, created_at, blueprint
-      FROM documents 
-      WHERE session_id = ${sessionId}
-      ORDER BY created_at DESC
-      LIMIT 20
-    `;
-    
-    const hasRecentFiles = recentFileCheck.rows.length > 0;
-    const recentFileTypes = [...new Set(recentFileCheck.rows.map(doc => doc.blueprint?.type || 'unknown'))];
-    
+    // Get recent chat history
     const conversationHistory = await sql`
-      SELECT content, role, created_at
+      SELECT content, role
       FROM chat_messages 
       WHERE session_id = ${sessionId}
       ORDER BY created_at DESC
       LIMIT 6
     `.catch(() => ({ rows: [] }));
-    
-    const recentConversation = conversationHistory.rows.length > 0 ? 
-      conversationHistory.rows.reverse().map(msg => `${msg.role.toUpperCase()}: ${msg.content}`).join('\n') : '';
 
-    return { hasRecentFiles, recentFileTypes, recentConversation };
+    const recentConversation = conversationHistory.rows.length > 0 
+      ? conversationHistory.rows.reverse().map(msg => `${msg.role.toUpperCase()}: ${msg.content}`).join('\n') 
+      : '';
+    
+    const lastAssistantMessage = conversationHistory.rows.length > 0 && conversationHistory.rows[0].role === 'assistant'
+      ? conversationHistory.rows[0].content
+      : '';
+
+    // Get info about the most recently uploaded document
+    const recentFile = await sql`
+      SELECT id, source_file, blueprint
+      FROM documents 
+      WHERE session_id = ${sessionId}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+
+    let recentFileContent = '';
+    if (recentFile.rows.length > 0) {
+      const recentDoc = recentFile.rows[0];
+      const chunks = await sql`
+        SELECT content FROM chunks WHERE document_id = ${recentDoc.id} LIMIT 3
+      `;
+      recentFileContent = `The user most recently uploaded '${recentDoc.source_file}'. The first few chunks are:\n` +
+        chunks.rows.map(c => c.content).join('\n---\n');
+    }
+
+    return { recentConversation, lastAssistantMessage, recentFileContent };
   }
 
   static async analyzeQuery(
@@ -81,38 +95,47 @@ export class QueryAnalyzer {
     sessionId: string, 
     visionModel: VisionModel
   ): Promise<QueryAnalysis> {
-    const { hasRecentFiles, recentFileTypes, recentConversation } = await this.getConversationContext(sessionId);
+    const { recentConversation, lastAssistantMessage, recentFileContent } = await this.getConversationContext(sessionId);
     const isStandaloneQuery = /this file|this image|latest|attached/i.test(message);
 
-    const analysisPrompt = `Analyze this query considering:
-- User has ${hasRecentFiles ? `recently uploaded ${recentFileTypes.join(', ')} files` : 'no recent files'}
-- Recent conversation: ${recentConversation || 'None'}
+    const analysisPrompt = `You are an expert query analyzer. Your goal is to understand the user's intent and provide a structured JSON output to guide a document retrieval system. Analyze the user's query based on the provided context.
 
-Query: "${message}"
+-- CONTEXT --
 
-Respond with JSON containing:
-- isComplex: boolean (true if comparing topics, asking multiple questions, or needs synthesis)
-- subQueries: string[] (if complex, break into 2-3 simpler search queries. Include synonyms and related terms)
-- focusRecent: boolean (true if query uses words like "this image", "this file", "this document", "the image", "what is in the image", or seems to reference the most recent upload)
-- isAboutLatestFile: boolean (true if asking about "the image", "this image", "what is in the image", "latest file", "attached file", "this file" when a standalone file was just uploaded)
-- isImageSpecific: boolean (true if asking about visual content like "man in photo", "person in image", "what does he look like", or describing people/objects in images)
-- hasEntityReference: boolean (true if using pronouns like "he", "him", "that man", "the person" that likely refer to someone mentioned in recent conversation)
-- shouldPrioritizeImages: boolean (true if this query should prioritize image results over text, considering both direct image queries and entity references)
-- isFollowUp: boolean (true if this seems to be a follow-up question about something mentioned in recent conversation)
-- expandedTerms: string[] (list of synonyms and related terms for the main query terms)
-- needsSpecificQuotes: boolean (true if asking for specific quotes, exact text, or "what does it say about")
-- isAnalysisQuery: boolean (true if analyzing multiple documents or comparing content)`;
+[RECENT CONVERSATION]:
+${recentConversation || 'None'}
+
+[LAST ASSISTANT RESPONSE]:
+${lastAssistantMessage || 'None'}
+
+[RECENT FILE CONTEXT]:
+${recentFileContent || 'None'}
+
+-- USER QUERY --
+"${message}"
+
+-- ANALYSIS --
+Analyze the query and respond with a JSON object containing these fields:
+- isComplex: boolean (true if comparing topics, asking multiple questions, or needs synthesis from multiple sources)
+- subQueries: string[] (if complex, break the main query into 2-3 simpler, self-contained search queries. These should be optimized for vector search.)
+- focusRecent: boolean (true if the query seems to reference the most recent upload, using terms like "this file", "this document", etc.)
+- isAboutLatestFile: boolean (true if asking specifically about the "latest file", "attached file", etc.)
+- isImageSpecific: boolean (true if asking about visual content like "what does the person look like")
+- hasEntityReference: boolean (true if using pronouns like "he", "him", "that" that likely refer to something in the conversation or documents)
+- shouldPrioritizeImages: boolean (true if the query should prioritize image results)
+- isFollowUp: boolean (true if this is a direct follow-up to the last assistant response)
+- expandedTerms: string[] (list of synonyms or related terms for the main query concepts)
+- needsSpecificQuotes: boolean (true if asking for exact text, like "what does it say about...")
+- isAnalysisQuery: boolean (true if the query is for analyzing multiple documents or comparing content)
+`;
 
     let analysis: QueryAnalysis;
-    if (!('generateContent' in visionModel)) {
-      analysis = { isComplex: false };
-    } else {
+    try {
       const analysisResult = await visionModel.generateContent([analysisPrompt]);
-      try {
-        analysis = analysisResult?.response?.text ? JSON.parse(analysisResult.response.text()) : { isComplex: false };
-      } catch {
-        analysis = { isComplex: false };
-      }
+      const jsonResponse = analysisResult.response?.text() || '{}';
+      analysis = JSON.parse(jsonResponse.replace(/```json\n|```/g, '').trim());
+    } catch {
+      analysis = { isComplex: false }; // Fallback on error
     }
     
     analysis.focusStandaloneOnly = isStandaloneQuery;
@@ -123,5 +146,27 @@ Respond with JSON containing:
     const fileNamePattern = /what is in ([^?]+)/i;
     const fileNameMatch = message.match(fileNamePattern);
     return fileNameMatch ? fileNameMatch[1].trim() : null;
+  }
+
+  static extractPageNumbers(message: string): number[] {
+    const pageNumbers: number[] = [];
+    // Regex to find numbers after "page", "pages", "p.", etc.
+    const regex = /(?:pages?|p[g.]?|on page)\s+((?:\d+\s*(?:,|\s+and\s+|&\s+)?\s*)+)/gi;
+    let match;
+    while ((match = regex.exec(message)) !== null) {
+      const numberString = match[1];
+      // Split by common delimiters and parse numbers
+      const numbers = numberString.split(/(?:,|\s+and\s+|&\s+)/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+        .map(s => parseInt(s, 10));
+      
+      for (const num of numbers) {
+        if (!isNaN(num) && !pageNumbers.includes(num)) {
+          pageNumbers.push(num);
+        }
+      }
+    }
+    return pageNumbers;
   }
 }

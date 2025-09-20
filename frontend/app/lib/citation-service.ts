@@ -35,7 +35,7 @@ interface AnalysisResult {
       PHRASE_WORD_COUNT: [3, 8]
     };
 
-    static analyzeTextStructure(text: string) {
+    static analyzeTextStructure(text: string): AnalysisResult {
       const lines = text.split('\n').filter(line => line.trim().length > 0);
       const totalWords = text.split(/\s+/).length;
       
@@ -84,7 +84,7 @@ interface AnalysisResult {
         return { type: 'PHRASE_HIGHLIGHT', reason: 'prose_dominant' };
       }
       
-      return { type: 'PHRASE_HIGHLIGHT', reason: 'regular_prose' };
+      return { type: 'PHRASE_HIGHLIGHT', reason: 'regular_prose' } as AnalysisResult;
     }
 
     static async extractContextualPhrases(text: string, context: string): Promise<string[]> {
@@ -246,6 +246,15 @@ interface AnalysisResult {
               )
             : null;
           
+          const analysisResult = this.analyzeTextStructure(sourceDoc.content || '');
+          let highlightPhrases: string[];
+
+          if (analysisResult.type === 'FULL_HIGHLIGHT') {
+            highlightPhrases = [(sourceDoc.content || '').trim()];
+          } else {
+            highlightPhrases = await this.extractContextualPhrases(sourceDoc.content || '', contextSnippet);
+          }
+
           citations.push({
             source_file: sourceFile,
             page_number: sourceDoc.page_number || pageNumber,
@@ -253,8 +262,8 @@ interface AnalysisResult {
             blob_url: blobUrl,
             chunk_id: sourceDoc.id,
             specific_content: sourceDoc.content,
-            highlight_phrases: [],
-            highlighted_html: sourceDoc.content || '',
+            highlight_phrases: highlightPhrases,
+            highlighted_html: this.applyHighlighting(sourceDoc.content || '', highlightPhrases, analysisResult),
             citation_id: `${sourceDoc.id}-${Date.now()}-${Math.random()}`,
             citation_index: citations.length,
             page_blueprint: pageBlueprint || undefined
